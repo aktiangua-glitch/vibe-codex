@@ -6,16 +6,20 @@ on:
       - master
     paths:
       - '.github/workflows/ci.yml'
+      - '.github/workflows/deploy-bean-pop-aliyun.yml'
+      - '.github/workflows/deploy-relay-drop-aliyun.yml'
       - 'bean-pop-studio/**'
-      - 'canvas-editor-studio/**'
+      - 'ops/**'
       - 'relay-drop/**'
   pull_request:
     branches:
       - master
     paths:
       - '.github/workflows/ci.yml'
+      - '.github/workflows/deploy-bean-pop-aliyun.yml'
+      - '.github/workflows/deploy-relay-drop-aliyun.yml'
       - 'bean-pop-studio/**'
-      - 'canvas-editor-studio/**'
+      - 'ops/**'
       - 'relay-drop/**'
 
 permissions:
@@ -45,37 +49,22 @@ jobs:
       - name: Run tests
         run: npm run test
 
+      - name: Validate static Nginx template placeholders
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          template = Path("ops/nginx/static-spa.conf.template").read_text()
+          required = ["__SERVER_NAMES__", "__APP_ROOT__", "__CLIENT_MAX_BODY_SIZE__"]
+
+          missing = [placeholder for placeholder in required if placeholder not in template]
+          if missing:
+              raise SystemExit(f"Missing template placeholders: {', '.join(missing)}")
+          PY
+
       - name: Build
         run: npm run build
-
-  canvas-editor-studio:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: canvas-editor-studio
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: canvas-editor-studio/pnpm-lock.yaml
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Activate pnpm
-        run: corepack prepare pnpm@10.29.3 --activate
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm build
 
   relay-drop:
     runs-on: ubuntu-latest
@@ -96,6 +85,20 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate Nginx template placeholders
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          template = Path("ops/nginx/node-app.conf.template").read_text()
+          required = ["__SERVER_NAMES__", "__CLIENT_MAX_BODY_SIZE__", "__APP_PORT__"]
+
+          missing = [placeholder for placeholder in required if placeholder not in template]
+          if missing:
+              raise SystemExit(f"Missing template placeholders: {', '.join(missing)}")
+          PY
 
       - name: Build
         run: npm run build

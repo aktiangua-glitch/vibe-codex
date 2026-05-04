@@ -1,0 +1,19 @@
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __SERVER_NAMES__;
+
+    root __APP_ROOT__;
+    index index.html;
+    client_max_body_size __CLIENT_MAX_BODY_SIZE__;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
