@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# dependencies
+node_modules/
+**/node_modules/
+
+# build output
+dist/
+build/
+coverage/
+.vite/
+**/dist/
+**/build/
+**/coverage/
+**/.vite/
+
+# logs
+*.log
+**/*.log
+
+# TypeScript
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# local env files
+.env.local
+.env.*.local
+**/.env.local
+**/.env.*.local
+
+# editor / IDE
+.idea/
+.vscode/
+**/.idea/
+**/.vscode/

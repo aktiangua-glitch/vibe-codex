@@ -1,0 +1,11 @@
+import '@demo/ui-kit/dist/antd.css';
+import '@demo/design-tokens/css/index.css';
+import '@demo/design-tokens/css/editor.css';
+import '@demo/design-tokens/css/component/scrollbar.css';
+import '@demo/design/common-polyfill';
+
+import Vue from 'vue';
+
+import App from './app.vue';
+
+void new Vue({ el: '#app', render: (h) => h(App) });

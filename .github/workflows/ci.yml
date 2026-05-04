@@ -1,0 +1,97 @@
+name: Monorepo CI
+
+on:
+  push:
+    paths:
+      - '.github/workflows/ci.yml'
+      - 'bean-pop-studio/**'
+      - 'canvas-editor-studio/**'
+      - 'relay-drop/**'
+  pull_request:
+    paths:
+      - '.github/workflows/ci.yml'
+      - 'bean-pop-studio/**'
+      - 'canvas-editor-studio/**'
+      - 'relay-drop/**'
+
+permissions:
+  contents: read
+
+jobs:
+  bean-pop-studio:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bean-pop-studio
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: bean-pop-studio/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  canvas-editor-studio:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: canvas-editor-studio
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: canvas-editor-studio/pnpm-lock.yaml
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate pnpm
+        run: corepack prepare pnpm@10.29.3 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+  relay-drop:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay-drop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: relay-drop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build

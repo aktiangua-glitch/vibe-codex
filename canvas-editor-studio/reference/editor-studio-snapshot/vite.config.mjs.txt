@@ -1,0 +1,3 @@
+import { getConfig } from '@tools/vite-config/app/index';
+
+export default getConfig();

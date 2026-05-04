@@ -1,0 +1,110 @@
+import atelierBg from './assets/atelier-bg.svg?url';
+import launchBg from './assets/launch-bg.svg?url';
+import signalBg from './assets/signal-bg.svg?url';
+import studioHero from './assets/studio-hero.svg?url';
+
+export type ScenePresetId = 'atelier' | 'launch' | 'signal';
+
+export interface ScenePreset {
+    id: ScenePresetId;
+    name: string;
+    kicker: string;
+    hint: string;
+    label: string;
+    headline: string;
+    body: string;
+    footer: string;
+    backgroundColor: string;
+    textColor: string;
+    accentColor: string;
+    backgroundUrl: string;
+    backgroundNaturalWidth: number;
+    backgroundNaturalHeight: number;
+    heroUrl: string;
+    heroNaturalWidth: number;
+    heroNaturalHeight: number;
+    heroFrame: {
+        left: number;
+        top: number;
+        width: number;
+        height: number;
+    };
+}
+
+export const SCENE_PRESETS: ScenePreset[] = [
+    {
+        id: 'atelier',
+        name: 'Atelier Board',
+        kicker: 'Atmospheric editorial preset',
+        hint: '适合做高反差封面和长标题实验',
+        label: 'EDITORIAL BOARD',
+        headline: 'Build the poster\nbefore the brief\nis even done',
+        body: '把背景、文案和主视觉放在同一块工作台里迭代。\n先定情绪，再定版式，最后再去磨每一句文案。',
+        footer: 'Scene / 01  Background / Copy / Hero',
+        backgroundColor: '#101927ff',
+        textColor: '#f8f2e8',
+        accentColor: '#8dd9ff',
+        backgroundUrl: atelierBg,
+        backgroundNaturalWidth: 1600,
+        backgroundNaturalHeight: 1200,
+        heroUrl: studioHero,
+        heroNaturalWidth: 900,
+        heroNaturalHeight: 1080,
+        heroFrame: {
+            left: 730,
+            top: 126,
+            width: 330,
+            height: 396,
+        },
+    },
+    {
+        id: 'launch',
+        name: 'Launch Shelf',
+        kicker: 'Warm product launch preset',
+        hint: '适合做卖点清晰的产品海报和封面卡片',
+        label: 'PRODUCT LAUNCH',
+        headline: 'Move faster when\nyour editor already\nfeels like a studio',
+        body: '一键切换背景氛围，直接在右侧改标题和正文。\n不是做“功能集合”，而是做一套能出成品的操作节奏。',
+        footer: 'Preset / 02  Product / Offer / CTA',
+        backgroundColor: '#f5ede4ff',
+        textColor: '#1c2030',
+        accentColor: '#ff845f',
+        backgroundUrl: launchBg,
+        backgroundNaturalWidth: 1600,
+        backgroundNaturalHeight: 1200,
+        heroUrl: studioHero,
+        heroNaturalWidth: 900,
+        heroNaturalHeight: 1080,
+        heroFrame: {
+            left: 746,
+            top: 108,
+            width: 314,
+            height: 378,
+        },
+    },
+    {
+        id: 'signal',
+        name: 'Signal Room',
+        kicker: 'Sharper campaign preset',
+        hint: '适合偏科技感、数据感的视觉方向',
+        label: 'CAMPAIGN SYSTEM',
+        headline: 'Sharper controls.\nCleaner layers.\nFewer dead ends.',
+        body: '把需要反复切的操作收进同一层交互里。\n背景图替换、文案改写、图层聚焦和导出不再分散。',
+        footer: 'System / 03  Layers / Focus / Export',
+        backgroundColor: '#121f1dff',
+        textColor: '#eef7f0',
+        accentColor: '#f2c66d',
+        backgroundUrl: signalBg,
+        backgroundNaturalWidth: 1600,
+        backgroundNaturalHeight: 1200,
+        heroUrl: studioHero,
+        heroNaturalWidth: 900,
+        heroNaturalHeight: 1080,
+        heroFrame: {
+            left: 736,
+            top: 118,
+            width: 322,
+            height: 386,
+        },
+    },
+];

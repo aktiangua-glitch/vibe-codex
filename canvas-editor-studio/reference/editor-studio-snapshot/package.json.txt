@@ -1,0 +1,40 @@
+{
+    "name": "editor-studio-demo",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build:demo": "vite build",
+        "dev": "vite",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "@demo/design/common-polyfill": "workspace:*",
+        "@demo/design/icons": "workspace:*",
+        "@demo/design/i18n-runtime": "workspace:*",
+        "@demo/design/stores": "workspace:*",
+        "@demo/design/types": "workspace:*",
+        "@demo/design/utils": "workspace:*",
+        "@demo/editor/events": "workspace:*",
+        "@demo/editor/framework": "workspace:*",
+        "@demo/editor/infinite-elements": "workspace:*",
+        "@demo/editor/infinite-plugins": "workspace:*",
+        "@demo/editor/utils": "workspace:*",
+        "@demo/design-tokens": "catalog:",
+        "@demo/editor-render": "catalog:",
+        "@demo/ui-kit": "catalog:",
+        "@demo/style-helper": "catalog:",
+        "lodash-es": "catalog:",
+        "nativebird": "catalog:",
+        "uuid": "catalog:",
+        "vue-demi": "catalog:"
+    },
+    "devDependencies": {
+        "@tools/vite-config": "workspace:*",
+        "@types/uuid": "catalog:",
+        "vite": "catalog:"
+    },
+    "peerDependencies": {
+        "vue": "catalog:#vue@2"
+    }
+}

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200">
+    <defs>
+        <linearGradient id="launch-wash" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#f5ede4" />
+            <stop offset="58%" stop-color="#f0cfaa" />
+            <stop offset="100%" stop-color="#d96e5b" />
+        </linearGradient>
+        <radialGradient id="launch-spot" cx="76%" cy="20%" r="58%">
+            <stop offset="0%" stop-color="#ff845f" stop-opacity="0.42" />
+            <stop offset="100%" stop-color="#ff845f" stop-opacity="0" />
+        </radialGradient>
+    </defs>
+    <rect width="1600" height="1200" fill="url(#launch-wash)" />
+    <rect width="1600" height="1200" fill="url(#launch-spot)" />
+    <path
+        d="M-120 960C154 836 346 762 562 774C738 784 860 892 1068 906C1268 918 1392 840 1720 666V1200H-120Z"
+        fill="#ffffff"
+        fill-opacity="0.26"
+    />
+    <path
+        d="M-20 816C284 694 486 662 688 702C872 738 1020 842 1198 842C1354 842 1490 782 1640 706"
+        fill="none"
+        stroke="#ffffff"
+        stroke-opacity="0.38"
+        stroke-width="4"
+    />
+    <circle cx="1212" cy="196" r="182" fill="#fff4ec" fill-opacity="0.24" />
+</svg>

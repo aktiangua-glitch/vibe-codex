@@ -1,0 +1,113 @@
+name: Deploy RelayDrop To Aliyun
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy-relay-drop-aliyun.yml'
+      - 'relay-drop/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-drop-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SSH_PORT: ${{ secrets.ALIYUN_SSH_PORT }}
+      APP_DIR: ${{ secrets.ALIYUN_APP_DIR }}
+      APP_PORT: ${{ secrets.RELAY_DROP_PORT }}
+
+    defaults:
+      run:
+        working-directory: relay-drop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: relay-drop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Create release bundle
+        run: tar -czf "$GITHUB_WORKSPACE/relay-drop-release.tgz" dist server.mjs package.json package-lock.json
+
+      - name: Configure SSH key
+        working-directory: ${{ github.workspace }}
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ALIYUN_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -p "${SSH_PORT:-22}" "${{ secrets.ALIYUN_HOST }}" >> "$HOME/.ssh/known_hosts"
+
+      - name: Upload release bundle
+        working-directory: ${{ github.workspace }}
+        run: |
+          scp -P "${SSH_PORT:-22}" relay-drop-release.tgz \
+            "${{ secrets.ALIYUN_SSH_USER }}@${{ secrets.ALIYUN_HOST }}:/tmp/relay-drop-${GITHUB_SHA}.tgz"
+
+      - name: Deploy on server
+        working-directory: ${{ github.workspace }}
+        run: |
+          ssh -p "${SSH_PORT:-22}" "${{ secrets.ALIYUN_SSH_USER }}@${{ secrets.ALIYUN_HOST }}" \
+            "GITHUB_SHA='${GITHUB_SHA}' APP_DIR='${APP_DIR}' APP_PORT='${APP_PORT}' bash -s" <<'EOF'
+          set -eu
+
+          APP_DIR="${APP_DIR:-$HOME/apps/relay-drop}"
+          APP_PORT="${APP_PORT:-3000}"
+          PID_FILE="$APP_DIR/shared/relay-drop.pid"
+          LOG_FILE="$APP_DIR/shared/relay-drop.log"
+          RELEASE_DIR="$APP_DIR/releases/$GITHUB_SHA"
+          BUNDLE_FILE="/tmp/relay-drop-$GITHUB_SHA.tgz"
+
+          mkdir -p "$APP_DIR/releases" "$APP_DIR/shared"
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+          tar -xzf "$BUNDLE_FILE" -C "$RELEASE_DIR"
+          rm -f "$BUNDLE_FILE"
+
+          cd "$RELEASE_DIR"
+          npm ci --omit=dev
+
+          if [ -f "$PID_FILE" ]; then
+            OLD_PID="$(cat "$PID_FILE")"
+            if kill -0 "$OLD_PID" 2>/dev/null; then
+              kill "$OLD_PID"
+              sleep 2
+            fi
+            rm -f "$PID_FILE"
+          fi
+
+          ln -sfn "$RELEASE_DIR" "$APP_DIR/current"
+
+          cd "$APP_DIR/current"
+          nohup env NODE_ENV=production HOST=0.0.0.0 PORT="$APP_PORT" node server.mjs >> "$LOG_FILE" 2>&1 &
+          echo $! > "$PID_FILE"
+
+          if command -v curl >/dev/null 2>&1; then
+            sleep 2
+            curl -fsS "http://127.0.0.1:$APP_PORT/healthz" >/dev/null
+          fi
+
+          cd "$APP_DIR/releases"
+          ls -1dt */ 2>/dev/null | tail -n +6 | xargs -r rm -rf --
+          EOF

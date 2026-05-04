@@ -1,0 +1,1493 @@
+<template>
+    <div :class="bem()">
+        <aside :class="bem('rail')">
+            <div :class="bem('brand')">
+                <p :class="bem('eyebrow')">Editor Studio</p>
+                <h1 :class="bem('title')">把背景、文案和图层控制收进同一套工作台</h1>
+                <p :class="bem('summary')">
+                    这个 demo 直接跑真实 editor 内核，外层换成更完整的编辑器工作台。
+                    重点不是堆按钮，而是缩短从“切换气质”到“改出成品”的路径。
+                </p>
+            </div>
+
+            <section :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Scene Presets</span>
+                    <strong>预设场景</strong>
+                </div>
+                <button
+                    v-for="preset in presets"
+                    :key="preset.id"
+                    type="button"
+                    :class="bem('preset', { active: preset.id === selectedPresetId })"
+                    @click="applyScenePreset(preset.id)"
+                >
+                    <span
+                        :class="bem('preset-thumb')"
+                        :style="{ backgroundImage: `url(${preset.backgroundUrl})` }"
+                    />
+                    <span :class="bem('preset-info')">
+                        <strong>{{ preset.name }}</strong>
+                        <small>{{ preset.kicker }}</small>
+                    </span>
+                </button>
+            </section>
+
+            <section :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Quick Actions</span>
+                    <strong>快捷动作</strong>
+                </div>
+                <div :class="bem('action-grid')">
+                    <button type="button" :class="bem('action-card')" @click="addTextBlock('headline')">
+                        <span>新建标题</span>
+                        <small>快速补一条大字文案</small>
+                    </button>
+                    <button type="button" :class="bem('action-card')" @click="addTextBlock('body')">
+                        <span>新建正文</span>
+                        <small>补说明文案和卖点段落</small>
+                    </button>
+                    <button type="button" :class="bem('action-card')" @click="uploadBackground">
+                        <span>上传背景图</span>
+                        <small>直接替换画板背景</small>
+                    </button>
+                    <button type="button" :class="bem('action-card')" @click="exportPng">
+                        <span>导出 PNG</span>
+                        <small>把当前画布直接出图</small>
+                    </button>
+                </div>
+            </section>
+
+            <section :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Current Intent</span>
+                    <strong>{{ currentPreset.name }}</strong>
+                </div>
+                <p :class="bem('note')">{{ currentPreset.hint }}</p>
+                <p :class="bem('note')">
+                    空白处回到场景检查器；点中任意文字或图片，会把右侧切到对应属性。
+                </p>
+            </section>
+        </aside>
+
+        <main :class="bem('workspace')">
+            <header :class="bem('toolbar')">
+                <div :class="bem('toolbar-info')">
+                    <span :class="bem('toolbar-chip')">{{ currentPreset.label }}</span>
+                    <span :class="bem('toolbar-separator')"></span>
+                    <span>{{ sceneStatus }}</span>
+                </div>
+                <div :class="bem('toolbar-actions')">
+                    <button type="button" :class="bem('toolbar-btn')" :disabled="!hasUndo" @click="undo">
+                        撤销
+                    </button>
+                    <button type="button" :class="bem('toolbar-btn')" :disabled="!hasRedo" @click="redo">
+                        重做
+                    </button>
+                    <button type="button" :class="bem('toolbar-btn')" :disabled="!canDuplicate" @click="duplicateSelection">
+                        复制元素
+                    </button>
+                    <button type="button" :class="bem('toolbar-btn', { strong: true })" @click="focusScene">
+                        场景面板
+                    </button>
+                </div>
+            </header>
+
+            <section :class="bem('stage')">
+                <div :class="bem('stage-copy')">
+                    <span>{{ currentPreset.kicker }}</span>
+                    <strong>真实 editor canvas</strong>
+                </div>
+                <Editor v-if="editorOptions" :editorOptions="editorOptions" ref="editorRef" />
+            </section>
+
+            <footer :class="bem('dock')">
+                <button type="button" :class="bem('dock-btn')" @click="addTextBlock('headline')">
+                    标题
+                </button>
+                <button type="button" :class="bem('dock-btn')" @click="addTextBlock('body')">
+                    正文
+                </button>
+                <button
+                    type="button"
+                    :class="bem('dock-btn')"
+                    :disabled="!isImageSelection"
+                    @click="replaceSelectedImage"
+                >
+                    换图
+                </button>
+                <button
+                    type="button"
+                    :class="bem('dock-btn')"
+                    :disabled="!canRemove"
+                    @click="removeSelection"
+                >
+                    删除
+                </button>
+                <button type="button" :class="bem('dock-btn', { accent: true })" @click="exportPng">
+                    导出
+                </button>
+            </footer>
+        </main>
+
+        <aside :class="bem('inspector')">
+            <section :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Inspector</span>
+                    <strong>{{ inspectorTitle }}</strong>
+                </div>
+                <p :class="bem('summary', { compact: true })">{{ inspectorDescription }}</p>
+            </section>
+
+            <section v-if="isSceneSelection" :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Background</span>
+                    <strong>背景图控制</strong>
+                </div>
+                <label :class="bem('field')">
+                    <span>底色</span>
+                    <input type="color" :value="backgroundColorInput" @input="updateBackgroundColor" />
+                </label>
+                <label :class="bem('field')">
+                    <span>背景透明度</span>
+                    <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        :value="backgroundOpacityInput"
+                        @input="updateBackgroundOpacity"
+                    />
+                    <small>{{ backgroundOpacityInput }}%</small>
+                </label>
+                <div :class="bem('segmented')">
+                    <button
+                        type="button"
+                        :class="bem('segmented-btn', { active: backgroundFitMode === 'cover' })"
+                        @click="changeBackgroundFit('cover')"
+                    >
+                        Cover
+                    </button>
+                    <button
+                        type="button"
+                        :class="bem('segmented-btn', { active: backgroundFitMode === 'contain' })"
+                        :disabled="!hasBackgroundImage"
+                        @click="changeBackgroundFit('contain')"
+                    >
+                        Contain
+                    </button>
+                </div>
+                <div :class="bem('stack-actions')">
+                    <button type="button" :class="bem('mini-btn')" @click="uploadBackground">
+                        上传背景图
+                    </button>
+                    <button
+                        type="button"
+                        :class="bem('mini-btn')"
+                        :disabled="!hasBackgroundImage"
+                        @click="clearBackground"
+                    >
+                        清空背景图
+                    </button>
+                </div>
+            </section>
+
+            <section v-if="isTextSelection" :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Copy</span>
+                    <strong>文案编辑</strong>
+                </div>
+                <label :class="bem('field')">
+                    <span>内容</span>
+                    <textarea
+                        :value="textDraft"
+                        rows="5"
+                        spellcheck="false"
+                        @input="updateTextContent"
+                    ></textarea>
+                </label>
+                <label :class="bem('field')">
+                    <span>字体</span>
+                    <select :value="fontFamilyDraft" @change="updateFontFamily">
+                        <option v-for="font in fontOptions" :key="font" :value="font">
+                            {{ font }}
+                        </option>
+                    </select>
+                </label>
+                <label :class="bem('field')">
+                    <span>字号</span>
+                    <input
+                        type="range"
+                        min="24"
+                        max="164"
+                        :value="fontSizeDraft"
+                        @input="updateFontSize"
+                    />
+                    <small>{{ fontSizeDraft }} px</small>
+                </label>
+                <div :class="bem('segmented')">
+                    <button
+                        type="button"
+                        :class="bem('segmented-btn', { active: fontWeightDraft >= 600 })"
+                        @click="updateFontWeight(700)"
+                    >
+                        Bold
+                    </button>
+                    <button
+                        type="button"
+                        :class="bem('segmented-btn', { active: fontWeightDraft < 600 })"
+                        @click="updateFontWeight(400)"
+                    >
+                        Regular
+                    </button>
+                    <button
+                        type="button"
+                        :class="bem('segmented-btn', { active: textAlignDraft === 'left' })"
+                        @click="updateTextAlign('left')"
+                    >
+                        左
+                    </button>
+                    <button
+                        type="button"
+                        :class="bem('segmented-btn', { active: textAlignDraft === 'center' })"
+                        @click="updateTextAlign('center')"
+                    >
+                        中
+                    </button>
+                    <button
+                        type="button"
+                        :class="bem('segmented-btn', { active: textAlignDraft === 'right' })"
+                        @click="updateTextAlign('right')"
+                    >
+                        右
+                    </button>
+                </div>
+                <label :class="bem('field')">
+                    <span>文字颜色</span>
+                    <input type="color" :value="textColorDraft" @input="updateTextColor" />
+                </label>
+            </section>
+
+            <section v-if="isImageSelection" :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Hero Asset</span>
+                    <strong>图片替换</strong>
+                </div>
+                <p :class="bem('note')">
+                    当前选中的是主视觉图片。你可以直接替换素材，保留当前版面位置和尺寸。
+                </p>
+                <div :class="bem('stack-actions')">
+                    <button type="button" :class="bem('mini-btn')" @click="replaceSelectedImage">
+                        上传替换
+                    </button>
+                    <button type="button" :class="bem('mini-btn')" @click="duplicateSelection">
+                        复制图片
+                    </button>
+                </div>
+            </section>
+
+            <section :class="bem('panel')">
+                <div :class="bem('section-header')">
+                    <span :class="bem('section-kicker')">Layers</span>
+                    <strong>图层列表</strong>
+                </div>
+                <button
+                    v-for="layer in layers"
+                    :key="layer.uuid"
+                    type="button"
+                    :class="bem('layer', { active: layer.uuid === currentElementId })"
+                    @click="focusLayer(layer)"
+                >
+                    <span>{{ layerName(layer) }}</span>
+                    <small>{{ layer.type }}</small>
+                </button>
+            </section>
+        </aside>
+    </div>
+</template>
+
+<script lang="ts" setup>
+import type { BaseElementModel, Font, LayoutModel, TextContent, TextElementModel, VPEditor } from '@demo/design/types';
+import { installEditorSync } from '@demo/design/utils/install-infinite-editor';
+import { pickFile } from '@demo/design/utils/pick-file';
+import { parseTransform } from '@demo/editor/utils/transform';
+import { loadImage } from '@demo/editor/utils/loader';
+import { useBEM } from '@demo/style-helper';
+import { cloneDeep } from 'lodash-es';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
+
+import boardTemplet from '../../infinite/resources/board.json';
+import fontListJson from '../../infinite/resources/font-list.json';
+import { SCENE_PRESETS, type ScenePreset, type ScenePresetId } from './presets';
+
+const STAGE_WIDTH = 1200;
+const STAGE_HEIGHT = 820;
+const DEFAULT_FONT = 'SourceHanSansSC-Bold';
+const DEFAULT_BODY_FONT = 'SourceHanSansSC-Regular';
+
+const { Editor } = installEditorSync();
+const bem = useBEM('editor-studio');
+
+const editorOptions = ref<Partial<VPEditor['options']>>();
+const editorRef = ref<VPEditor | null>(null);
+const selectedPresetId = ref<ScenePresetId>('atelier');
+const backgroundColorInput = ref('#101927');
+const backgroundOpacityInput = ref(100);
+const backgroundFitMode = ref<'cover' | 'contain'>('cover');
+const textDraft = ref('');
+const fontFamilyDraft = ref(DEFAULT_FONT);
+const fontSizeDraft = ref(72);
+const fontWeightDraft = ref(700);
+const textColorDraft = ref('#f8f2e8');
+const textAlignDraft = ref<'left' | 'center' | 'right'>('left');
+const isSceneDirty = ref(false);
+const presetAssetUrls = ref<Record<ScenePresetId, { backgroundUrl: string; heroUrl: string }>>({
+    atelier: { backgroundUrl: '', heroUrl: '' },
+    launch: { backgroundUrl: '', heroUrl: '' },
+    signal: { backgroundUrl: '', heroUrl: '' },
+});
+
+const presets = SCENE_PRESETS;
+const currentPreset = computed(
+    () => SCENE_PRESETS.find((preset) => preset.id === selectedPresetId.value) || SCENE_PRESETS[0],
+);
+
+const editor = computed(() => editorRef.value);
+const currentLayout = computed<LayoutModel | null>(() => editor.value?.currentLayout ?? null);
+const currentElement = computed<BaseElementModel | null>(
+    () => editor.value?.currentSubElement ?? editor.value?.currentElement ?? null,
+);
+const currentElementId = computed(() => currentElement.value?.uuid ?? '');
+const isTextSelection = computed(() => currentElement.value?.type === 'text');
+const isImageSelection = computed(() => currentElement.value?.type === 'image');
+const isSceneSelection = computed(() => !isTextSelection.value && !isImageSelection.value);
+const layers = computed(() => (currentLayout.value ? [...currentLayout.value.elements].reverse() : []));
+const hasBackgroundImage = computed(() => !!currentLayout.value?.background?.image?.url);
+const canDuplicate = computed(() => !!currentElement.value);
+const canRemove = computed(() => !!currentElement.value);
+const hasUndo = computed(() => editor.value?.hasUndo ?? false);
+const hasRedo = computed(() => editor.value?.hasRedo ?? false);
+const sceneStatus = computed(() =>
+    isSceneDirty.value ? '已修改，可继续替换背景或调整文案' : '预设已同步到画布',
+);
+const inspectorTitle = computed(() => {
+    if (isTextSelection.value) return '当前文案';
+    if (isImageSelection.value) return '当前主视觉';
+    return '场景背景';
+});
+const inspectorDescription = computed(() => {
+    if (isTextSelection.value) return '右侧直接改文字内容、字体、字号、对齐和颜色。';
+    if (isImageSelection.value) return '当前是图片元素，保留版位不动，直接替换素材即可。';
+    return '空白处默认回到场景检查器，适合先定背景氛围，再逐步补文案和图层。';
+});
+
+const fontOptions = [
+    'SourceHanSansSC-Bold',
+    'SourceHanSansSC-Regular',
+    'SourceHanSerifSC-SemiBold',
+    'SourceHanSerifSC-Regular',
+    'MFShangYa-Regular',
+    'QingYuan',
+];
+
+function toPlainHex(color: string | undefined, fallback: string) {
+    if (!color) return fallback;
+    if (/^#[0-9a-fA-F]{6}$/.test(color)) return color;
+    if (/^#[0-9a-fA-F]{8}$/.test(color)) return color.slice(0, 7);
+
+    const matched = color.match(/\d+(\.\d+)?/g);
+    if (!matched || matched.length < 3) return fallback;
+
+    const [r, g, b] = matched.slice(0, 3).map((item) => Number(item));
+
+    return `#${[r, g, b]
+        .map((value) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0'))
+        .join('')}`;
+}
+
+function buildBoardTemplet() {
+    const templet = cloneDeep(boardTemplet as Record<string, any>);
+    const page = templet.pages[0];
+    const layout = page.elements[0];
+
+    templet.global.layout.width = STAGE_WIDTH;
+    templet.global.layout.height = STAGE_HEIGHT;
+    templet.global.layout.backgroundColor = '#101927ff';
+    templet.global.layout.backgroundImage = null;
+    templet.global.layout.backgroundSize = [0, 0];
+    templet.global.layout.backgroundImageInfo = {
+        opacity: 1,
+        width: STAGE_WIDTH,
+        height: STAGE_HEIGHT,
+        transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 },
+    };
+
+    layout.width = STAGE_WIDTH;
+    layout.height = STAGE_HEIGHT;
+    layout.background = {
+        color: '#101927ff',
+        watermarkEnable: false,
+        image: null,
+    };
+    layout.backgroundColor = '#101927ff';
+    layout.backgroundGradient = null;
+    layout.backgroundMask = {
+        color: '#000000ff',
+        opacity: 0,
+    };
+    layout.elements = [];
+
+    return templet;
+}
+
+function buildTextContents(
+    element: TextElementModel | null,
+    overrides: Partial<TextContent> & { content?: string },
+) {
+    const baseContent =
+        element?.contents?.[0] ||
+        ({
+            content: element?.content || '',
+            fontSize: element?.fontSize,
+            fontFamily: element?.fontFamily,
+            fontWeight: element?.fontWeight,
+            color: element?.color,
+        } as TextContent);
+
+    return [
+        {
+            ...baseContent,
+            ...overrides,
+        },
+    ];
+}
+
+function markDirty() {
+    isSceneDirty.value = true;
+}
+
+function setSelectionToScene() {
+    if (!editor.value) return;
+    editor.value.focusElement(null);
+}
+
+function focusScene() {
+    setSelectionToScene();
+}
+
+function clearLayoutElements(layout: LayoutModel) {
+    if (!editor.value) return;
+    const existing = layout.elements.slice();
+    if (existing.length) {
+        editor.value.removeElement(existing, layout);
+    }
+}
+
+async function toObjectUrl(dataUrl: string) {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+
+    return URL.createObjectURL(blob);
+}
+
+async function resolvePresetAssets() {
+    const resolved = await Promise.all(
+        SCENE_PRESETS.map(async (preset) => [
+            preset.id,
+            {
+                backgroundUrl: await toObjectUrl(preset.backgroundUrl),
+                heroUrl: await toObjectUrl(preset.heroUrl),
+            },
+        ]),
+    );
+
+    presetAssetUrls.value = Object.fromEntries(resolved) as Record<
+        ScenePresetId,
+        { backgroundUrl: string; heroUrl: string }
+    >;
+}
+
+function addSceneText(
+    layout: LayoutModel,
+    config: {
+        content: string;
+        left: number;
+        top: number;
+        width?: number;
+        fontSize: number;
+        fontFamily: string;
+        fontWeight: number;
+        color: string;
+        textAlign?: 'left' | 'center' | 'right';
+        lineHeight?: number;
+    },
+) {
+    if (!editor.value) return;
+
+    editor.value.addText(
+        config.content,
+        {
+            left: config.left,
+            top: config.top,
+            width: config.width,
+            fontSize: config.fontSize,
+            fontFamily: config.fontFamily,
+            fontWeight: config.fontWeight,
+            color: config.color,
+            textAlign: config.textAlign || 'left',
+            lineHeight: config.lineHeight || 1.08,
+            letterSpacing: 0,
+        } as Partial<BaseElementModel>,
+        layout,
+    );
+}
+
+function setBackgroundImage(
+    layout: LayoutModel,
+    options: {
+        url: string;
+        naturalWidth: number;
+        naturalHeight: number;
+        color: string;
+        fitMode: 'cover' | 'contain';
+        opacity: number;
+    },
+) {
+    if (!editor.value) return;
+
+    const ratioBase =
+        options.fitMode === 'contain'
+            ? Math.min(layout.width / options.naturalWidth, layout.height / options.naturalHeight)
+            : Math.max(layout.width / options.naturalWidth, layout.height / options.naturalHeight);
+
+    const backgroundImage = {
+        ...(layout.background?.image || {}),
+        url: options.url,
+        width: layout.width,
+        height: layout.height,
+        left: 0,
+        top: 0,
+        opacity: options.opacity,
+        resourceType: 'image',
+        naturalWidth: options.naturalWidth,
+        naturalHeight: options.naturalHeight,
+        transform: parseTransform({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }),
+        imageTransform: parseTransform({
+            a: ratioBase,
+            b: 0,
+            c: 0,
+            d: ratioBase,
+            tx: 0,
+            ty: 0,
+        }),
+        filterInfo: {
+            id: '',
+            url: '',
+            strong: 0.8,
+            intensity: 0.8,
+            zipUrl: '',
+        },
+    };
+
+    editor.value.changeLayout(
+        {
+            background: {
+                ...(layout.background || { watermarkEnable: false }),
+                color: options.color,
+                image: backgroundImage,
+            },
+        },
+        layout,
+    );
+}
+
+function applyScenePreset(presetId: ScenePresetId) {
+    if (!editor.value || !currentLayout.value) return;
+
+    selectedPresetId.value = presetId;
+    const preset = SCENE_PRESETS.find((item) => item.id === presetId) || SCENE_PRESETS[0];
+    const assets = presetAssetUrls.value[preset.id];
+    const layout = currentLayout.value;
+
+    clearLayoutElements(layout);
+    setBackgroundImage(layout, {
+        url: assets?.backgroundUrl || preset.backgroundUrl,
+        naturalWidth: preset.backgroundNaturalWidth,
+        naturalHeight: preset.backgroundNaturalHeight,
+        color: preset.backgroundColor,
+        fitMode: 'cover',
+        opacity: 1,
+    });
+
+    editor.value.addElement(
+        {
+            type: 'image',
+            left: preset.heroFrame.left,
+            top: preset.heroFrame.top,
+            width: preset.heroFrame.width,
+            height: preset.heroFrame.height,
+            url: assets?.heroUrl || preset.heroUrl,
+            naturalWidth: preset.heroNaturalWidth,
+            naturalHeight: preset.heroNaturalHeight,
+            resourceType: 'image',
+            opacity: 1,
+        },
+        layout,
+    );
+
+    addSceneText(layout, {
+        content: preset.label,
+        left: 96,
+        top: 96,
+        fontSize: 18,
+        fontFamily: DEFAULT_FONT,
+        fontWeight: 600,
+        color: preset.accentColor,
+    });
+    addSceneText(layout, {
+        content: preset.headline,
+        left: 96,
+        top: 154,
+        width: 520,
+        fontSize: 74,
+        fontFamily: DEFAULT_FONT,
+        fontWeight: 700,
+        color: preset.textColor,
+        lineHeight: 1.02,
+    });
+    addSceneText(layout, {
+        content: preset.body,
+        left: 100,
+        top: 466,
+        width: 460,
+        fontSize: 24,
+        fontFamily: DEFAULT_BODY_FONT,
+        fontWeight: 400,
+        color: preset.textColor,
+        lineHeight: 1.36,
+    });
+    addSceneText(layout, {
+        content: preset.footer,
+        left: 98,
+        top: 720,
+        fontSize: 18,
+        fontFamily: DEFAULT_BODY_FONT,
+        fontWeight: 500,
+        color: preset.accentColor,
+    });
+
+    backgroundColorInput.value = toPlainHex(preset.backgroundColor, '#101927');
+    backgroundOpacityInput.value = 100;
+    backgroundFitMode.value = 'cover';
+    isSceneDirty.value = false;
+    setSelectionToScene();
+    editor.value.fitZoom();
+}
+
+function updateTextElement(
+    patch: Partial<TextElementModel>,
+    contentPatch?: Partial<TextContent> & { content?: string },
+) {
+    if (!editor.value || !isTextSelection.value || currentElement.value?.type !== 'text') return;
+    const target = currentElement.value as TextElementModel;
+    const contents = buildTextContents(target, contentPatch || {});
+
+    editor.value.changeElement(
+        {
+            ...patch,
+            contents,
+        },
+        target,
+    );
+    markDirty();
+}
+
+function updateTextContent(event: Event) {
+    const value = (event.target as HTMLTextAreaElement).value;
+    textDraft.value = value;
+    updateTextElement(
+        {
+            content: value,
+        } as Partial<TextElementModel>,
+        { content: value },
+    );
+}
+
+function updateFontFamily(event: Event) {
+    const value = (event.target as HTMLSelectElement).value;
+    fontFamilyDraft.value = value;
+    updateTextElement(
+        {
+            fontFamily: value,
+        } as Partial<TextElementModel>,
+        { fontFamily: value },
+    );
+}
+
+function updateFontSize(event: Event) {
+    const value = Number((event.target as HTMLInputElement).value);
+    fontSizeDraft.value = value;
+    updateTextElement(
+        {
+            fontSize: value,
+        } as Partial<TextElementModel>,
+        { fontSize: value },
+    );
+}
+
+function updateFontWeight(value: number) {
+    fontWeightDraft.value = value;
+    updateTextElement(
+        {
+            fontWeight: value,
+        } as Partial<TextElementModel>,
+        { fontWeight: value },
+    );
+}
+
+function updateTextColor(event: Event) {
+    const value = (event.target as HTMLInputElement).value;
+    textColorDraft.value = value;
+    updateTextElement(
+        {
+            color: value,
+        } as Partial<TextElementModel>,
+        { color: value },
+    );
+}
+
+function updateTextAlign(value: 'left' | 'center' | 'right') {
+    textAlignDraft.value = value;
+    updateTextElement({
+        textAlign: value,
+    } as Partial<TextElementModel>);
+}
+
+function addTextBlock(kind: 'headline' | 'body') {
+    if (!editor.value || !currentLayout.value) return;
+
+    const content = kind === 'headline' ? '新的主标题' : '新的说明文案，继续在这里细化卖点与语气。';
+    const fontSize = kind === 'headline' ? 64 : 24;
+    const fontFamily = kind === 'headline' ? DEFAULT_FONT : DEFAULT_BODY_FONT;
+    const fontWeight = kind === 'headline' ? 700 : 400;
+    const color = kind === 'headline' ? currentPreset.value.textColor : currentPreset.value.textColor;
+    const left = kind === 'headline' ? 160 : 180;
+    const top = kind === 'headline' ? 220 : 560;
+
+    const element = editor.value.addText(
+        content,
+        {
+            left,
+            top,
+            fontSize,
+            fontFamily,
+            fontWeight,
+            color,
+            textAlign: 'left',
+            lineHeight: kind === 'headline' ? 1.02 : 1.36,
+        } as Partial<BaseElementModel>,
+        currentLayout.value,
+    );
+
+    editor.value.focusElement(element);
+    markDirty();
+}
+
+async function uploadBackground() {
+    const file = await pickFile({
+        accept: 'image/png,image/jpeg,image/jpg,image/webp,image/svg+xml',
+    });
+    if (!file || !currentLayout.value) return;
+
+    const url = URL.createObjectURL(file);
+    const image = await loadImage(url);
+    setBackgroundImage(currentLayout.value, {
+        url,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        color: `${backgroundColorInput.value}ff`,
+        fitMode: backgroundFitMode.value,
+        opacity: backgroundOpacityInput.value / 100,
+    });
+    markDirty();
+}
+
+async function replaceSelectedImage() {
+    if (!editor.value || !isImageSelection.value || !currentElement.value) return;
+
+    const file = await pickFile({
+        accept: 'image/png,image/jpeg,image/jpg,image/webp,image/svg+xml',
+    });
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    const image = await loadImage(url);
+
+    editor.value.changeElement(
+        {
+            url,
+            naturalWidth: image.naturalWidth,
+            naturalHeight: image.naturalHeight,
+        },
+        currentElement.value,
+    );
+    markDirty();
+}
+
+function updateBackgroundColor(event: Event) {
+    const value = (event.target as HTMLInputElement).value;
+    backgroundColorInput.value = value;
+    if (!editor.value || !currentLayout.value) return;
+
+    editor.value.changeLayout(
+        {
+            background: {
+                ...(currentLayout.value.background || { watermarkEnable: false }),
+                color: `${value}ff`,
+            },
+        },
+        currentLayout.value,
+    );
+    markDirty();
+}
+
+function updateBackgroundOpacity(event: Event) {
+    const value = Number((event.target as HTMLInputElement).value);
+    backgroundOpacityInput.value = value;
+    if (!editor.value || !currentLayout.value?.background?.image) return;
+
+    editor.value.changeLayout(
+        {
+            background: {
+                ...(currentLayout.value.background || { watermarkEnable: false }),
+                image: {
+                    ...currentLayout.value.background.image,
+                    opacity: value / 100,
+                },
+            },
+        },
+        currentLayout.value,
+    );
+    markDirty();
+}
+
+function changeBackgroundFit(mode: 'cover' | 'contain') {
+    backgroundFitMode.value = mode;
+    if (!currentLayout.value?.background?.image) return;
+
+    const image = currentLayout.value.background.image;
+    setBackgroundImage(currentLayout.value, {
+        url: image.url,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        color: currentLayout.value.background?.color || `${backgroundColorInput.value}ff`,
+        fitMode: mode,
+        opacity: image.opacity || 1,
+    });
+    markDirty();
+}
+
+function clearBackground() {
+    if (!editor.value || !currentLayout.value) return;
+
+    editor.value.changeLayout(
+        {
+            background: {
+                ...(currentLayout.value.background || { watermarkEnable: false }),
+                image: null,
+            },
+        },
+        currentLayout.value,
+    );
+    markDirty();
+}
+
+function duplicateSelection() {
+    if (!editor.value || !currentElement.value) return;
+
+    const [copy] = editor.value.copyElement(currentElement.value);
+    copy.left = currentElement.value.left + 36;
+    copy.top = currentElement.value.top + 36;
+    const [pasted] = editor.value.pasteElement(copy);
+    editor.value.focusElement(pasted);
+    markDirty();
+}
+
+function removeSelection() {
+    if (!editor.value || !currentElement.value || !currentElement.value.parent) return;
+
+    editor.value.removeElement(currentElement.value, currentElement.value.parent);
+    setSelectionToScene();
+    markDirty();
+}
+
+function layerName(layer: BaseElementModel) {
+    if (layer.type === 'text') {
+        const content = (layer as TextElementModel).contents?.[0]?.content || layer.content || '文字';
+        return content.replace(/\n/g, ' ').slice(0, 18);
+    }
+    if (layer.type === 'image') {
+        return '主视觉图片';
+    }
+    return layer.type;
+}
+
+function focusLayer(layer: BaseElementModel) {
+    if (!editor.value) return;
+    editor.value.focusElement(layer);
+}
+
+function undo() {
+    editor.value?.undo();
+}
+
+function redo() {
+    editor.value?.redo();
+}
+
+function exportPng() {
+    if (!editor.value) return;
+
+    editor.value.plugins.invokeCommand(
+        'infiniteCore:export',
+        currentLayout.value,
+        'png',
+        () => undefined,
+        (result: Blob | null) => {
+            if (!result) return;
+
+            const url = URL.createObjectURL(result);
+            const link = document.createElement('a');
+            link.download = `editor-studio-${selectedPresetId.value}.png`;
+            link.href = url;
+            link.click();
+            URL.revokeObjectURL(url);
+        },
+    );
+}
+
+watch(
+    currentElement,
+    (element) => {
+        if (!element || element.type !== 'text') return;
+
+        const textElement = element as TextElementModel;
+        const content = textElement.contents?.[0];
+        textDraft.value = content?.content || textElement.content || '';
+        fontFamilyDraft.value = content?.fontFamily || textElement.fontFamily || DEFAULT_FONT;
+        fontSizeDraft.value = Number(content?.fontSize || textElement.fontSize || 72);
+        fontWeightDraft.value = Number(content?.fontWeight || textElement.fontWeight || 700);
+        textColorDraft.value = toPlainHex(content?.color || textElement.color, '#f8f2e8');
+        textAlignDraft.value = (textElement.textAlign as 'left' | 'center' | 'right') || 'left';
+    },
+    { immediate: true },
+);
+
+watch(
+    currentLayout,
+    (layout) => {
+        if (!layout) return;
+
+        backgroundColorInput.value = toPlainHex(layout.background?.color, '#101927');
+        backgroundOpacityInput.value = Math.round((layout.background?.image?.opacity || 1) * 100);
+    },
+    { immediate: true },
+);
+
+onMounted(async () => {
+    editorOptions.value = {
+        fontList: fontListJson as unknown as Font[],
+        mode: 'board',
+    };
+
+    await nextTick();
+
+    if (!editorRef.value) return;
+
+    await editorRef.value.setTemplet(buildBoardTemplet());
+    await resolvePresetAssets();
+    editorRef.value.plugins.invokeCommand('guide:toggleVisible', true);
+    editorRef.value.plugins.invokeCommand('ruler:toggleVisible', true);
+    applyScenePreset(selectedPresetId.value);
+
+    // @ts-expect-error 调试入口
+    window.editorStudio = editorRef.value;
+});
+</script>
+
+<style lang="less">
+.editor-studio {
+    --shell-bg: #f3efe7;
+    --workspace-bg: #0d1622;
+    --panel-bg: rgba(255, 255, 255, 0.76);
+    --panel-border: rgba(21, 35, 48, 0.08);
+    --text-primary: #10202d;
+    --text-secondary: rgba(16, 32, 45, 0.72);
+    --text-muted: rgba(16, 32, 45, 0.52);
+    --accent: #7dd3fc;
+    --accent-strong: #0f6f90;
+    --accent-soft: rgba(125, 211, 252, 0.18);
+    --danger: #ff7a59;
+    --shadow-soft: 0 24px 80px rgba(20, 31, 44, 0.08);
+    --shadow-strong: 0 18px 46px rgba(9, 15, 24, 0.18);
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr) 340px;
+    gap: 18px;
+    height: 100%;
+    padding: 18px;
+    color: var(--text-primary);
+    background:
+        radial-gradient(circle at top left, rgba(255, 255, 255, 0.75), transparent 28%),
+        linear-gradient(140deg, #f8f4ec 0%, #ece6da 100%);
+
+    &__rail,
+    &__workspace,
+    &__inspector {
+        min-height: 0;
+    }
+
+    &__rail,
+    &__inspector {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+
+    &__workspace {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: 14px;
+    }
+
+    &__brand,
+    &__panel,
+    &__toolbar,
+    &__dock {
+        background: var(--panel-bg);
+        border: 1px solid var(--panel-border);
+        box-shadow: var(--shadow-soft);
+        backdrop-filter: blur(16px);
+    }
+
+    &__brand,
+    &__panel {
+        border-radius: 24px;
+        padding: 20px;
+    }
+
+    &__toolbar,
+    &__dock {
+        border-radius: 20px;
+        padding: 14px 18px;
+    }
+
+    &__brand {
+        background:
+            linear-gradient(150deg, rgba(255, 255, 255, 0.9), rgba(253, 248, 239, 0.78)),
+            var(--panel-bg);
+    }
+
+    &__eyebrow,
+    &__section-kicker {
+        margin: 0;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        color: var(--text-muted);
+        text-transform: uppercase;
+    }
+
+    &__title {
+        margin: 10px 0 0;
+        font-family: 'Sora', 'PingFang SC', sans-serif;
+        font-size: clamp(28px, 3vw, 42px);
+        line-height: 1.04;
+        text-wrap: pretty;
+    }
+
+    &__summary,
+    &__note {
+        margin: 12px 0 0;
+        font-size: 14px;
+        line-height: 1.6;
+        color: var(--text-secondary);
+        text-wrap: pretty;
+    }
+
+    &__summary--compact {
+        margin-top: 8px;
+    }
+
+    &__section-header {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 14px;
+
+        strong {
+            font-size: 17px;
+            line-height: 1.2;
+        }
+    }
+
+    &__preset,
+    &__action-card,
+    &__layer,
+    &__toolbar-btn,
+    &__dock-btn,
+    &__mini-btn,
+    &__segmented-btn {
+        border: 0;
+        cursor: pointer;
+        transition:
+            transform 180ms ease,
+            background-color 180ms ease,
+            border-color 180ms ease,
+            box-shadow 180ms ease,
+            color 180ms ease;
+    }
+
+    &__preset,
+    &__layer,
+    &__action-card {
+        width: 100%;
+        text-align: left;
+    }
+
+    &__preset {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        padding: 10px;
+        margin-top: 10px;
+        background: rgba(255, 255, 255, 0.52);
+        border: 1px solid transparent;
+        border-radius: 18px;
+
+        &:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 24px rgba(19, 27, 38, 0.08);
+        }
+
+        &--active {
+            background: rgba(255, 255, 255, 0.92);
+            border-color: rgba(15, 111, 144, 0.18);
+            box-shadow: inset 0 0 0 1px rgba(15, 111, 144, 0.14);
+        }
+    }
+
+    &__preset-thumb {
+        display: block;
+        width: 64px;
+        height: 64px;
+        background-position: center;
+        background-size: cover;
+        border-radius: 16px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+    }
+
+    &__preset-info {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+
+        strong {
+            font-size: 14px;
+        }
+
+        small {
+            margin-top: 4px;
+            overflow: hidden;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+
+    &__action-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    &__action-card {
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.62);
+        border: 1px solid transparent;
+        border-radius: 18px;
+
+        span,
+        small {
+            display: block;
+        }
+
+        span {
+            font-weight: 600;
+        }
+
+        small {
+            margin-top: 6px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-muted);
+            text-wrap: pretty;
+        }
+
+        &:hover {
+            transform: translateY(-1px);
+            background: rgba(255, 255, 255, 0.92);
+            border-color: rgba(15, 111, 144, 0.12);
+        }
+    }
+
+    &__toolbar,
+    &__dock {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    &__toolbar-info,
+    &__toolbar-actions,
+    &__dock {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    &__toolbar-chip {
+        display: inline-flex;
+        align-items: center;
+        height: 30px;
+        padding: 0 12px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        color: var(--accent-strong);
+        text-transform: uppercase;
+        background: var(--accent-soft);
+        border-radius: 999px;
+    }
+
+    &__toolbar-separator {
+        width: 1px;
+        height: 18px;
+        background: rgba(16, 32, 45, 0.12);
+    }
+
+    &__toolbar-btn,
+    &__dock-btn,
+    &__mini-btn,
+    &__segmented-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 38px;
+        padding: 0 14px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+        background: rgba(255, 255, 255, 0.74);
+        border-radius: 999px;
+
+        &:disabled {
+            color: rgba(16, 32, 45, 0.3);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        &:not(:disabled):hover {
+            transform: translateY(-1px);
+            background: #ffffff;
+            box-shadow: 0 10px 18px rgba(16, 32, 45, 0.08);
+        }
+    }
+
+    &__toolbar-btn--strong,
+    &__dock-btn--accent {
+        color: #f6fbff;
+        background: linear-gradient(120deg, #0f6f90, #1f97c2);
+    }
+
+    &__stage {
+        position: relative;
+        overflow: hidden;
+        min-height: 0;
+        border-radius: 30px;
+        background:
+            radial-gradient(circle at top left, rgba(134, 207, 255, 0.16), transparent 28%),
+            radial-gradient(circle at bottom right, rgba(255, 177, 135, 0.12), transparent 28%),
+            linear-gradient(160deg, #101927 0%, #0b111b 100%);
+        box-shadow: var(--shadow-strong);
+        isolation: isolate;
+    }
+
+    &__stage-copy {
+        position: absolute;
+        top: 22px;
+        left: 24px;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 10px 12px;
+        color: rgba(255, 255, 255, 0.9);
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 16px;
+        backdrop-filter: blur(8px);
+
+        span {
+            font-size: 11px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            opacity: 0.78;
+        }
+
+        strong {
+            font-size: 14px;
+            font-weight: 600;
+        }
+    }
+
+    &__stage > div:last-child {
+        position: absolute;
+        inset: 0;
+    }
+
+    &__field {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 14px;
+
+        span {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        small {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        textarea,
+        select,
+        input[type='color'] {
+            width: 100%;
+        }
+
+        textarea,
+        select {
+            padding: 12px 14px;
+            font: inherit;
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid rgba(16, 32, 45, 0.08);
+            border-radius: 16px;
+            outline: none;
+        }
+
+        textarea {
+            min-height: 122px;
+            resize: vertical;
+            line-height: 1.55;
+        }
+
+        input[type='color'] {
+            height: 44px;
+            padding: 6px;
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid rgba(16, 32, 45, 0.08);
+            border-radius: 14px;
+        }
+
+        input[type='range'] {
+            width: 100%;
+            accent-color: #1f97c2;
+        }
+    }
+
+    &__segmented {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+    }
+
+    &__segmented-btn {
+        min-width: 62px;
+
+        &--active {
+            color: #ffffff;
+            background: #10202d;
+        }
+    }
+
+    &__stack-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+    }
+
+    &__layer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        margin-top: 10px;
+        background: rgba(255, 255, 255, 0.62);
+        border: 1px solid transparent;
+        border-radius: 16px;
+
+        span {
+            overflow: hidden;
+            font-size: 13px;
+            font-weight: 600;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        small {
+            flex-shrink: 0;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        &:hover {
+            background: rgba(255, 255, 255, 0.88);
+        }
+
+        &--active {
+            border-color: rgba(15, 111, 144, 0.18);
+            box-shadow: inset 0 0 0 1px rgba(15, 111, 144, 0.14);
+        }
+    }
+
+    @media (max-width: 1360px) {
+        grid-template-columns: 250px minmax(0, 1fr) 300px;
+    }
+
+    @media (max-width: 1120px) {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        overflow: auto;
+
+        &__workspace {
+            min-height: 70vh;
+        }
+
+        &__stage {
+            min-height: 560px;
+        }
+    }
+}
+</style>
