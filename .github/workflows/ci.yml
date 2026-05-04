@@ -2,12 +2,8 @@ name: Monorepo CI
 
 on:
   push:
-    paths:
-      - '.github/workflows/ci.yml'
-      - 'bean-pop-studio/**'
-      - 'canvas-editor-studio/**'
-      - 'relay-drop/**'
-  pull_request:
+    branches:
+      - master
     paths:
       - '.github/workflows/ci.yml'
       - 'bean-pop-studio/**'

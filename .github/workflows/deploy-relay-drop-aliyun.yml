@@ -3,7 +3,7 @@ name: Deploy RelayDrop To Aliyun
 on:
   push:
     branches:
-      - main
+      - master
     paths:
       - '.github/workflows/deploy-relay-drop-aliyun.yml'
       - 'relay-drop/**'
