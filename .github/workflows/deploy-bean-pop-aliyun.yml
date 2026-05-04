@@ -1,20 +1,20 @@
-name: Deploy RelayDrop To Aliyun
+name: Deploy Bean Pop To Aliyun
 
 on:
   push:
     branches:
       - master
     paths:
-      - '.github/workflows/deploy-relay-drop-aliyun.yml'
+      - '.github/workflows/deploy-bean-pop-aliyun.yml'
+      - 'bean-pop-studio/**'
       - 'ops/nginx/**'
-      - 'relay-drop/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: relay-drop-production
+  group: bean-pop-production
   cancel-in-progress: true
 
 jobs:
@@ -22,16 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SSH_PORT: ${{ secrets.ALIYUN_SSH_PORT }}
-      APP_DIR: /opt/apps/relay-drop
-      APP_PORT: "3000"
-      NGINX_SERVER_NAMES: ${{ vars.RELAY_DROP_SERVER_NAMES }}
-      NGINX_SITE_NAME: site-relay-drop
+      APP_DIR: /opt/apps/bean-pop-studio
+      NGINX_SERVER_NAMES: ${{ vars.BEAN_POP_SERVER_NAMES }}
+      NGINX_SITE_NAME: site-bean-pop
       NGINX_SITE_DIR: /etc/nginx/conf.d
       CLIENT_MAX_BODY_SIZE: 50m
 
     defaults:
       run:
-        working-directory: relay-drop
+        working-directory: bean-pop-studio
 
     steps:
       - name: Checkout
@@ -42,7 +41,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: relay-drop/package-lock.json
+          cache-dependency-path: bean-pop-studio/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -51,7 +50,7 @@ jobs:
         run: npm run build
 
       - name: Create release bundle
-        run: tar -czf "$GITHUB_WORKSPACE/relay-drop-release.tgz" dist server.mjs package.json package-lock.json
+        run: tar -czf "$GITHUB_WORKSPACE/bean-pop-release.tgz" dist
 
       - name: Render Nginx config
         id: render_nginx
@@ -66,7 +65,10 @@ jobs:
           tokens = [token for token in re.split(r"[\s,]+", raw_server_names.strip()) if token]
 
           if not tokens:
-              raise SystemExit("GitHub variable RELAY_DROP_SERVER_NAMES is required.")
+              raise SystemExit("GitHub variable BEAN_POP_SERVER_NAMES is required.")
+
+          app_dir = os.environ.get("APP_DIR") or "/opt/apps/bean-pop-studio"
+          app_root = f"{app_dir}/current/dist"
 
           server_names = []
           for token in tokens:
@@ -77,22 +79,22 @@ jobs:
 
           values = {
               "__SERVER_NAMES__": " ".join(server_names),
+              "__APP_ROOT__": app_root,
               "__CLIENT_MAX_BODY_SIZE__": os.environ.get("CLIENT_MAX_BODY_SIZE") or "50m",
-              "__APP_PORT__": os.environ.get("APP_PORT") or "3000",
           }
 
-          rendered = Path("ops/nginx/node-app.conf.template").read_text()
+          rendered = Path("ops/nginx/static-spa.conf.template").read_text()
           for placeholder, value in values.items():
               rendered = rendered.replace(placeholder, value)
 
-          output_path = Path("relay-drop-nginx.conf")
+          output_path = Path("bean-pop-nginx.conf")
           output_path.write_text(rendered)
 
           github_output = Path(os.environ["GITHUB_OUTPUT"])
           with github_output.open("a") as fh:
-              fh.write(f"site_name={os.environ.get('NGINX_SITE_NAME') or 'site-relay-drop'}\n")
+              fh.write(f"site_name={os.environ.get('NGINX_SITE_NAME') or 'site-bean-pop'}\n")
               fh.write(f"site_dir={os.environ.get('NGINX_SITE_DIR') or '/etc/nginx/conf.d'}\n")
-              fh.write(f"server_names={' '.join(server_names)}\n")
+              fh.write(f"app_dir={app_dir}\n")
           PY
 
       - name: Configure SSH key
@@ -109,62 +111,37 @@ jobs:
       - name: Upload release bundle
         working-directory: ${{ github.workspace }}
         run: |
-          scp -P "${SSH_PORT:-22}" relay-drop-release.tgz \
-            "${{ secrets.ALIYUN_SSH_USER }}@${{ secrets.ALIYUN_HOST }}:/tmp/relay-drop-${GITHUB_SHA}.tgz"
+          scp -P "${SSH_PORT:-22}" bean-pop-release.tgz \
+            "${{ secrets.ALIYUN_SSH_USER }}@${{ secrets.ALIYUN_HOST }}:/tmp/bean-pop-${GITHUB_SHA}.tgz"
 
       - name: Upload Nginx config
         working-directory: ${{ github.workspace }}
         run: |
-          scp -P "${SSH_PORT:-22}" relay-drop-nginx.conf \
-            "${{ secrets.ALIYUN_SSH_USER }}@${{ secrets.ALIYUN_HOST }}:/tmp/relay-drop-nginx-${GITHUB_SHA}.conf"
+          scp -P "${SSH_PORT:-22}" bean-pop-nginx.conf \
+            "${{ secrets.ALIYUN_SSH_USER }}@${{ secrets.ALIYUN_HOST }}:/tmp/bean-pop-nginx-${GITHUB_SHA}.conf"
 
       - name: Deploy on server
         working-directory: ${{ github.workspace }}
         run: |
           ssh -p "${SSH_PORT:-22}" "${{ secrets.ALIYUN_SSH_USER }}@${{ secrets.ALIYUN_HOST }}" \
-            "GITHUB_SHA='${GITHUB_SHA}' APP_DIR='${APP_DIR}' APP_PORT='${APP_PORT}' NGINX_SITE_NAME='${{ steps.render_nginx.outputs.site_name }}' NGINX_SITE_DIR='${{ steps.render_nginx.outputs.site_dir }}' bash -s" <<'EOF'
+            "GITHUB_SHA='${GITHUB_SHA}' APP_DIR='${{ steps.render_nginx.outputs.app_dir }}' NGINX_SITE_NAME='${{ steps.render_nginx.outputs.site_name }}' NGINX_SITE_DIR='${{ steps.render_nginx.outputs.site_dir }}' bash -s" <<'EOF'
           set -eu
 
-          APP_DIR="${APP_DIR:-/opt/apps/relay-drop}"
-          APP_PORT="${APP_PORT:-3000}"
-          NGINX_SITE_NAME="${NGINX_SITE_NAME:-site-relay-drop}"
+          APP_DIR="${APP_DIR:-/opt/apps/bean-pop-studio}"
+          NGINX_SITE_NAME="${NGINX_SITE_NAME:-site-bean-pop}"
           NGINX_SITE_DIR="${NGINX_SITE_DIR:-/etc/nginx/conf.d}"
-          PID_FILE="$APP_DIR/shared/relay-drop.pid"
-          LOG_FILE="$APP_DIR/shared/relay-drop.log"
           RELEASE_DIR="$APP_DIR/releases/$GITHUB_SHA"
-          BUNDLE_FILE="/tmp/relay-drop-$GITHUB_SHA.tgz"
-          NGINX_TMP_FILE="/tmp/relay-drop-nginx-$GITHUB_SHA.conf"
+          BUNDLE_FILE="/tmp/bean-pop-$GITHUB_SHA.tgz"
+          NGINX_TMP_FILE="/tmp/bean-pop-nginx-$GITHUB_SHA.conf"
           NGINX_CONF_FILE="$NGINX_SITE_DIR/$NGINX_SITE_NAME.conf"
 
-          mkdir -p "$APP_DIR/releases" "$APP_DIR/shared"
-          mkdir -p "$NGINX_SITE_DIR"
+          mkdir -p "$APP_DIR/releases" "$APP_DIR/shared" "$NGINX_SITE_DIR"
           rm -rf "$RELEASE_DIR"
           mkdir -p "$RELEASE_DIR"
           tar -xzf "$BUNDLE_FILE" -C "$RELEASE_DIR"
           rm -f "$BUNDLE_FILE"
 
-          cd "$RELEASE_DIR"
-          npm ci --omit=dev
-
-          if [ -f "$PID_FILE" ]; then
-            OLD_PID="$(cat "$PID_FILE")"
-            if kill -0 "$OLD_PID" 2>/dev/null; then
-              kill "$OLD_PID"
-              sleep 2
-            fi
-            rm -f "$PID_FILE"
-          fi
-
           ln -sfn "$RELEASE_DIR" "$APP_DIR/current"
-
-          cd "$APP_DIR/current"
-          nohup env NODE_ENV=production HOST=0.0.0.0 PORT="$APP_PORT" node server.mjs >> "$LOG_FILE" 2>&1 &
-          echo $! > "$PID_FILE"
-
-          if command -v curl >/dev/null 2>&1; then
-            sleep 2
-            curl -fsS "http://127.0.0.1:$APP_PORT/healthz" >/dev/null
-          fi
 
           install -m 644 "$NGINX_TMP_FILE" "$NGINX_CONF_FILE"
           rm -f "$NGINX_TMP_FILE"
