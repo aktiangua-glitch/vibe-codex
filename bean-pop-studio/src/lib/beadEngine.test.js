@@ -59,6 +59,28 @@ describe("beadEngine", () => {
     expect(selected).toEqual(["COMMON", "DARK"]);
   });
 
+  it("merges similar color families before dropping a distinct accent", () => {
+    const warmA = color("WARM_A", { l: 63, a: 11, b: 14 });
+    const warmB = color("WARM_B", { l: 66, a: 10, b: 13 });
+    const warmC = color("WARM_C", { l: 60, a: 13, b: 16 });
+    const cool = color("COOL", { l: 54, a: -12, b: -18 });
+    const light = color("LIGHT", { l: 90, a: 1, b: 3 });
+
+    const selected = selectActivePaletteForUsage(
+      [
+        { color: warmA, count: 420, weight: 510 },
+        { color: warmB, count: 300, weight: 360 },
+        { color: warmC, count: 160, weight: 210 },
+        { color: cool, count: 110, weight: 150 },
+        { color: light, count: 90, weight: 120 },
+      ],
+      3,
+      1080
+    ).map((item) => item.code);
+
+    expect(selected).toEqual(["WARM_A", "LIGHT", "COOL"]);
+  });
+
   it("removes similar isolated speckles without deleting contrast details", () => {
     const base = color("BASE", { l: 82, a: 1, b: 4 });
     const speckle = color("SPECKLE", { l: 80, a: 2, b: 5 });

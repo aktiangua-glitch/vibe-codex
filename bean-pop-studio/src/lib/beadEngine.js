@@ -196,8 +196,78 @@ export function getPreviewCellSize({
   return Math.max(1, fitCell);
 }
 
+function getViewportContentSize(element) {
+  if (!element) {
+    return {
+      height: 0,
+      width: 0,
+    };
+  }
+
+  const styles = window.getComputedStyle(element);
+  const paddingX = (Number.parseFloat(styles.paddingLeft) || 0) + (Number.parseFloat(styles.paddingRight) || 0);
+  const paddingY = (Number.parseFloat(styles.paddingTop) || 0) + (Number.parseFloat(styles.paddingBottom) || 0);
+
+  return {
+    width: Math.max(1, element.clientWidth - paddingX),
+    height: Math.max(1, element.clientHeight - paddingY),
+  };
+}
+
 function getBrightness(color) {
   return (color.rgb.r * 0.299 + color.rgb.g * 0.587 + color.rgb.b * 0.114) / 255;
+}
+
+function mixRgb(left, right, amount) {
+  const blend = Math.max(0, Math.min(1, amount));
+  return {
+    r: Math.round(left.r + (right.r - left.r) * blend),
+    g: Math.round(left.g + (right.g - left.g) * blend),
+    b: Math.round(left.b + (right.b - left.b) * blend),
+  };
+}
+
+function rgbToCss(rgb, alpha = 1) {
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+}
+
+function getPreviewBeadFinish(color) {
+  if (!color?.rgb) return null;
+
+  const bright = getBrightness(color);
+  const chroma = getRgbChroma(color.rgb);
+  const lightLab = color.lab?.l ?? 0;
+  const highlightMix = bright >= 0.76 ? 0.08 : bright <= 0.28 ? 0.04 : 0.06;
+  const shadowMix = bright >= 0.82 ? 0.16 : bright <= 0.28 ? 0.28 : 0.2;
+  const shadowTarget = bright <= 0.28
+    ? { r: 10, g: 8, b: 6 }
+    : { r: 34, g: 28, b: 20 };
+
+  let rimColor = "rgba(36, 29, 22, 0.08)";
+  let rimWidthFactor = 0.038;
+  let boardShadowColor = "rgba(50, 40, 28, 0.08)";
+
+  if (bright >= 0.84 || lightLab >= 86) {
+    rimColor = "rgba(122, 105, 78, 0.24)";
+    rimWidthFactor = 0.052;
+    boardShadowColor = "rgba(86, 68, 45, 0.13)";
+  } else if (bright >= 0.68 || chroma <= 0.22 || lightLab >= 72) {
+    rimColor = "rgba(96, 80, 58, 0.14)";
+    rimWidthFactor = 0.046;
+    boardShadowColor = "rgba(70, 56, 38, 0.1)";
+  } else if (bright <= 0.24) {
+    rimColor = "rgba(255, 255, 255, 0.12)";
+    rimWidthFactor = 0.04;
+    boardShadowColor = "rgba(18, 14, 11, 0.08)";
+  }
+
+  return {
+    boardShadowColor,
+    highlightColor: rgbToCss(mixRgb(color.rgb, { r: 255, g: 255, b: 255 }, highlightMix), 0.96),
+    shadowColor: rgbToCss(mixRgb(color.rgb, shadowTarget, shadowMix), 1),
+    rimColor,
+    rimWidthFactor,
+  };
 }
 
 function findMatrixColorByCode(matrix, code) {
@@ -458,6 +528,48 @@ function addSelectedColor(selected, usage, limit) {
   selected.set(usage.color.code, usage.color);
 }
 
+function getMinPaletteDistance(color, selectedColors) {
+  if (!selectedColors.length) return Number.POSITIVE_INFINITY;
+  return selectedColors.reduce((shortest, selectedColor) => (
+    Math.min(shortest, deltaE2000(color.lab, selectedColor.lab))
+  ), Number.POSITIVE_INFINITY);
+}
+
+function getPaletteCompressionThresholds(limit, usageCount) {
+  const compressionRatio = clamp(limit / Math.max(usageCount, 1), 0.14, 1);
+  return {
+    coverageDistance: 22 + (1 - compressionRatio) * 14,
+    hardDistance: 8 + (1 - compressionRatio) * 12,
+    softDistance: 18 + (1 - compressionRatio) * 14,
+  };
+}
+
+function getSimilarityPenalty(distance, thresholds) {
+  if (!Number.isFinite(distance)) return 1;
+  if (distance <= thresholds.hardDistance) return 0.18;
+  if (distance >= thresholds.softDistance) return 1;
+
+  const progress = (distance - thresholds.hardDistance)
+    / Math.max(thresholds.softDistance - thresholds.hardDistance, 1);
+
+  return 0.18 + progress * 0.82;
+}
+
+function getPaletteCoverageScore(candidateUsage, rankedUsages, selected, thresholds) {
+  let score = 0;
+
+  rankedUsages.forEach((usage) => {
+    if (!usage || selected.has(usage.color.code) || usage.color.code === candidateUsage.color.code) return;
+
+    const distance = deltaE2000(candidateUsage.color.lab, usage.color.lab);
+    if (distance > thresholds.coverageDistance) return;
+
+    score += usage.weight * (1 - distance / thresholds.coverageDistance);
+  });
+
+  return score * 0.18;
+}
+
 export function selectActivePaletteForUsage(usages, maxColors, totalPixels) {
   const limit = Math.max(1, Math.min(Math.round(maxColors), usages.length));
   const selected = new Map();
@@ -465,6 +577,7 @@ export function selectActivePaletteForUsage(usages, maxColors, totalPixels) {
   const significant = usages.filter((usage) => usage.count / Math.max(totalPixels, 1) >= 0.012);
   const detailCandidates = usages.filter((usage) => usage.count >= meaningfulCount);
   const ranked = usages.slice().sort((left, right) => right.weight - left.weight);
+  const thresholds = getPaletteCompressionThresholds(limit, usages.length);
 
   const darkAnchor = detailCandidates
     .filter((usage) => usage.color.lab.l <= 34)
@@ -481,7 +594,28 @@ export function selectActivePaletteForUsage(usages, maxColors, totalPixels) {
   addSelectedColor(selected, vividAnchor, limit);
   addSelectedColor(selected, lightAnchor, limit);
 
-  ranked.forEach((usage) => addSelectedColor(selected, usage, limit));
+  while (selected.size < limit) {
+    const selectedColors = [...selected.values()];
+    let nextUsage = null;
+    let nextScore = Number.NEGATIVE_INFINITY;
+
+    ranked.forEach((usage) => {
+      if (!usage || selected.has(usage.color.code)) return;
+
+      const minDistance = getMinPaletteDistance(usage.color, selectedColors);
+      const similarityPenalty = getSimilarityPenalty(minDistance, thresholds);
+      const coverageScore = getPaletteCoverageScore(usage, ranked, selected, thresholds);
+      const candidateScore = usage.weight * similarityPenalty + coverageScore;
+
+      if (candidateScore > nextScore) {
+        nextScore = candidateScore;
+        nextUsage = usage;
+      }
+    });
+
+    if (!nextUsage) break;
+    addSelectedColor(selected, nextUsage, limit);
+  }
 
   return [...selected.values()];
 }
@@ -746,7 +880,9 @@ export function processImage({
     matrix.push(currentRow);
   }
 
-  const cleanedMatrix = activePalette.length >= 24 ? matrix : smoothIsolatedCells(matrix, width, height);
+  const cleanedMatrix = activePalette.length >= 32
+    ? matrix
+    : smoothIsolatedCells(smoothIsolatedCells(matrix, width, height), width, height);
   const counts = buildCountsFromMatrix(cleanedMatrix, width, height);
 
   return {
@@ -797,222 +933,30 @@ export function renderSourceCanvas(canvas, { image, source, frameLabel = "", cle
   }
 }
 
-export function renderBeadCanvas(canvas, {
+function buildVisibleArtworkBounds({
   matrix,
-  width: gridWidth,
-  height: gridHeight,
-  roundBeads,
-  centerVisible = false,
-  hero = false,
-  showGrid = false,
-  transparentBackground = false,
-  hiddenColorCodes = [],
-  hiddenCellKeys = [],
-  highlightColorCodes = [],
+  gridWidth,
+  gridHeight,
+  hiddenCodes,
+  hiddenCells,
   focusColorCode = "",
-}) {
-  if (!canvas || !matrix.length || !gridWidth || !gridHeight) return;
-
-  const width = canvas.clientWidth || 320;
-  const height = canvas.clientHeight || Math.round(width * 1.04);
-  const context = setCanvasSize(canvas, width, height);
-  const padding = hero ? 16 : 22;
-  const hiddenCodes = new Set(hiddenColorCodes);
-  const hiddenCells = new Set(hiddenCellKeys);
-  const highlightCodes = new Set(highlightColorCodes);
-  const hasHighlights = highlightCodes.size > 0;
-  let visibleBounds = null;
-
-  if (centerVisible && !showGrid) {
-    matrix.forEach((row, rowIndex) => {
-      row.forEach((color, columnIndex) => {
-        if (!color) return;
-        if (hiddenCodes.has(color.code)) return;
-        if (hiddenCells.has(rowIndex * gridWidth + columnIndex)) return;
-        if (focusColorCode && color.code === focusColorCode) return;
-
-        if (!visibleBounds) {
-          visibleBounds = {
-            maxColumn: columnIndex,
-            maxRow: rowIndex,
-            minColumn: columnIndex,
-            minRow: rowIndex,
-          };
-          return;
-        }
-
-        visibleBounds.minColumn = Math.min(visibleBounds.minColumn, columnIndex);
-        visibleBounds.maxColumn = Math.max(visibleBounds.maxColumn, columnIndex);
-        visibleBounds.minRow = Math.min(visibleBounds.minRow, rowIndex);
-        visibleBounds.maxRow = Math.max(visibleBounds.maxRow, rowIndex);
-      });
-    });
-  }
-
-  const fitGridWidth = visibleBounds
-    ? visibleBounds.maxColumn - visibleBounds.minColumn + 1
-    : gridWidth;
-  const fitGridHeight = visibleBounds
-    ? visibleBounds.maxRow - visibleBounds.minRow + 1
-    : gridHeight;
-  const cell = getPreviewCellSize({
-    containerWidth: width,
-    containerHeight: height,
-    gridWidth: fitGridWidth,
-    gridHeight: fitGridHeight,
-    padding,
-  });
-  const artworkWidth = cell * gridWidth;
-  const artworkHeight = cell * gridHeight;
-  const offsetX = Math.floor((width - artworkWidth) / 2);
-  const offsetY = Math.floor((height - artworkHeight) / 2);
-  let drawOffsetX = offsetX;
-  let drawOffsetY = offsetY;
-
-  if (visibleBounds) {
-    const visibleWidth = (visibleBounds.maxColumn - visibleBounds.minColumn + 1) * cell;
-    const visibleHeight = (visibleBounds.maxRow - visibleBounds.minRow + 1) * cell;
-    drawOffsetX = Math.floor((width - visibleWidth) / 2) - visibleBounds.minColumn * cell;
-    drawOffsetY = Math.floor((height - visibleHeight) / 2) - visibleBounds.minRow * cell;
-  }
-
-  context.clearRect(0, 0, width, height);
-  if (!transparentBackground) {
-    const wash = context.createLinearGradient(0, 0, width, height);
-    wash.addColorStop(0, "rgba(255, 255, 255, 0.98)");
-    wash.addColorStop(1, "rgba(255, 247, 233, 0.92)");
-    context.fillStyle = wash;
-    context.fillRect(0, 0, width, height);
-
-    context.fillStyle = "rgba(255, 255, 255, 0.72)";
-    if (visibleBounds && centerVisible && !showGrid) {
-      const frameX = drawOffsetX + visibleBounds.minColumn * cell;
-      const frameY = drawOffsetY + visibleBounds.minRow * cell;
-      const frameWidth = (visibleBounds.maxColumn - visibleBounds.minColumn + 1) * cell;
-      const frameHeight = (visibleBounds.maxRow - visibleBounds.minRow + 1) * cell;
-      context.fillRect(frameX - 10, frameY - 10, frameWidth + 20, frameHeight + 20);
-    } else {
-      context.fillRect(offsetX - 10, offsetY - 10, artworkWidth + 20, artworkHeight + 20);
-    }
-  }
-
-  matrix.forEach((row, rowIndex) => {
-    row.forEach((color, columnIndex) => {
-      if (!color) return;
-      if (hiddenCodes.has(color.code)) return;
-      if (hiddenCells.has(rowIndex * gridWidth + columnIndex)) return;
-
-      const x = drawOffsetX + columnIndex * cell;
-      const y = drawOffsetY + rowIndex * cell;
-      const radius = cell / 2;
-      const isHighlighted = highlightCodes.has(color.code);
-
-      context.globalAlpha = hasHighlights && !isHighlighted ? 0.16 : 1;
-      context.fillStyle = color.hex;
-      if (roundBeads) {
-        context.beginPath();
-        context.arc(x + radius, y + radius, Math.max(2, radius - 0.8), 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillRect(x + 1, y + 1, Math.max(2, cell - 2), Math.max(2, cell - 2));
-      }
-
-      if (!hero && cell >= 16) {
-        context.fillStyle = getBrightness(color) > 0.62 ? "#17181a" : "#ffffff";
-        context.font = `700 ${Math.max(7, Math.floor(cell * 0.28))}px "IBM Plex Mono", monospace`;
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.fillText(color.code, x + radius, y + radius + 0.5);
-      }
-
-      if (hasHighlights && isHighlighted) {
-        context.globalAlpha = 1;
-        context.strokeStyle = "rgba(8, 173, 134, 0.92)";
-        context.lineWidth = Math.max(1.6, cell * 0.13);
-        if (roundBeads) {
-          context.beginPath();
-          context.arc(x + radius, y + radius, Math.max(2, radius - 0.3), 0, Math.PI * 2);
-          context.stroke();
-        } else {
-          context.strokeRect(x + 1.5, y + 1.5, Math.max(2, cell - 3), Math.max(2, cell - 3));
-        }
-      }
-    });
-  });
-
-  if (!hero && showGrid) {
-    context.globalAlpha = 1;
-    context.strokeStyle = "rgba(16, 36, 31, 0.12)";
-    context.lineWidth = 1;
-    for (let index = 0; index <= gridWidth; index += 1) {
-      const x = offsetX + index * cell;
-      context.beginPath();
-      context.moveTo(x, offsetY);
-      context.lineTo(x, offsetY + artworkHeight);
-      context.stroke();
-    }
-    for (let index = 0; index <= gridHeight; index += 1) {
-      const y = offsetY + index * cell;
-      context.beginPath();
-      context.moveTo(offsetX, y);
-      context.lineTo(offsetX + artworkWidth, y);
-      context.stroke();
-    }
-
-    context.strokeStyle = "rgba(255, 90, 54, 0.44)";
-    context.lineWidth = 2;
-    for (let index = 10; index < gridWidth; index += 10) {
-      const x = offsetX + index * cell;
-      context.beginPath();
-      context.moveTo(x, offsetY);
-      context.lineTo(x, offsetY + artworkHeight);
-      context.stroke();
-    }
-    for (let index = 10; index < gridHeight; index += 10) {
-      const y = offsetY + index * cell;
-      context.beginPath();
-      context.moveTo(offsetX, y);
-      context.lineTo(offsetX + artworkWidth, y);
-      context.stroke();
-    }
-  }
-  context.globalAlpha = 1;
-}
-
-export function renderPatternCanvas(canvas, {
-  matrix,
-  width: gridWidth,
-  height: gridHeight,
-  roundBeads,
-  showCodes,
   centerVisible = false,
-  focusColorCode = "",
-  hero = false,
-  fitToViewport = false,
-  transparentBackground = false,
-  hiddenColorCodes = [],
-  hiddenCellKeys = [],
-  highlightColorCodes = [],
-  viewportPadding = null,
+  cropBackground = false,
+  backgroundDeltaE = 18,
   visiblePaddingCells = 0,
 }) {
-  if (!canvas || !matrix.length || !gridWidth || !gridHeight) return;
-
-  const viewportElement = fitToViewport ? canvas.parentElement : null;
-  const width = viewportElement?.clientWidth || canvas.clientWidth || 320;
-  const availableHeight = viewportElement?.clientHeight || canvas.clientHeight || Math.round(width * 1.04);
-  const padding = Number.isFinite(viewportPadding)
-    ? Math.max(0, viewportPadding)
-    : hero ? 16 : 20;
-  const hiddenCodes = new Set(hiddenColorCodes);
-  const hiddenCells = new Set(hiddenCellKeys);
-  const highlightCodes = new Set(highlightColorCodes);
-  const hasHighlights = highlightCodes.size > 0;
-  const focusColor = findMatrixColorByCode(matrix, focusColorCode) || matrix[0]?.[0] || null;
   const cropBackgroundCells = new Set();
+  if (!centerVisible || !matrix.length || !gridWidth || !gridHeight) {
+    return {
+      cropBackgroundCells,
+      visibleBounds: null,
+    };
+  }
+
+  const focusColor = findMatrixColorByCode(matrix, focusColorCode) || matrix[0]?.[0] || null;
   let visibleBounds = null;
 
-  if (centerVisible && fitToViewport && focusColor) {
+  if (cropBackground && focusColor) {
     const queue = [];
     const backgroundCandidateCodes = new Set([focusColor.code]);
     const edgeCounts = new Map();
@@ -1052,7 +996,7 @@ export function renderPatternCanvas(canvas, {
       if (backgroundCandidateCodes.has(color.code)) return true;
       if (color.code === focusColor.code) return true;
       if (!color.lab || !focusColor.lab) return false;
-      return deltaE2000(color.lab, focusColor.lab) <= 18;
+      return deltaE2000(color.lab, focusColor.lab) <= backgroundDeltaE;
     };
     const enqueue = (rowIndex, columnIndex) => {
       if (
@@ -1089,31 +1033,30 @@ export function renderPatternCanvas(canvas, {
     }
   }
 
-  if (centerVisible && fitToViewport) {
-    matrix.forEach((row, rowIndex) => {
-      row.forEach((color, columnIndex) => {
-        if (!color) return;
-        if (hiddenCodes.has(color.code)) return;
-        if (hiddenCells.has(rowIndex * gridWidth + columnIndex)) return;
-        if (cropBackgroundCells.has(rowIndex * gridWidth + columnIndex)) return;
+  matrix.forEach((row, rowIndex) => {
+    row.forEach((color, columnIndex) => {
+      const key = rowIndex * gridWidth + columnIndex;
+      if (!color) return;
+      if (hiddenCodes.has(color.code)) return;
+      if (hiddenCells.has(key)) return;
+      if (cropBackgroundCells.has(key)) return;
 
-        if (!visibleBounds) {
-          visibleBounds = {
-            maxColumn: columnIndex,
-            maxRow: rowIndex,
-            minColumn: columnIndex,
-            minRow: rowIndex,
-          };
-          return;
-        }
+      if (!visibleBounds) {
+        visibleBounds = {
+          maxColumn: columnIndex,
+          maxRow: rowIndex,
+          minColumn: columnIndex,
+          minRow: rowIndex,
+        };
+        return;
+      }
 
-        visibleBounds.minColumn = Math.min(visibleBounds.minColumn, columnIndex);
-        visibleBounds.maxColumn = Math.max(visibleBounds.maxColumn, columnIndex);
-        visibleBounds.minRow = Math.min(visibleBounds.minRow, rowIndex);
-        visibleBounds.maxRow = Math.max(visibleBounds.maxRow, rowIndex);
-      });
+      visibleBounds.minColumn = Math.min(visibleBounds.minColumn, columnIndex);
+      visibleBounds.maxColumn = Math.max(visibleBounds.maxColumn, columnIndex);
+      visibleBounds.minRow = Math.min(visibleBounds.minRow, rowIndex);
+      visibleBounds.maxRow = Math.max(visibleBounds.maxRow, rowIndex);
     });
-  }
+  });
 
   if (visibleBounds && visiblePaddingCells > 0) {
     const cellPadding = Math.max(0, Math.round(visiblePaddingCells));
@@ -1124,6 +1067,285 @@ export function renderPatternCanvas(canvas, {
       maxRow: Math.min(gridHeight - 1, visibleBounds.maxRow + cellPadding),
     };
   }
+
+  return {
+    cropBackgroundCells,
+    visibleBounds,
+  };
+}
+
+export function renderBeadCanvas(canvas, {
+  matrix,
+  width: gridWidth,
+  height: gridHeight,
+  roundBeads,
+  fitToViewport = false,
+  centerVisible = false,
+  hero = false,
+  showGrid = false,
+  transparentBackground = false,
+  hiddenColorCodes = [],
+  hiddenCellKeys = [],
+  highlightColorCodes = [],
+  focusColorCode = "",
+  viewportPadding = null,
+  backgroundDeltaE = 18,
+  visiblePaddingCells = 0,
+}) {
+  if (!canvas || !matrix.length || !gridWidth || !gridHeight) return;
+
+  const viewportElement = fitToViewport ? canvas.parentElement : null;
+  const viewportSize = fitToViewport ? getViewportContentSize(viewportElement) : null;
+  const width = viewportSize?.width || viewportElement?.clientWidth || canvas.clientWidth || 320;
+  const availableHeight = viewportSize?.height || viewportElement?.clientHeight || canvas.clientHeight || Math.round(width * 1.04);
+  const padding = Number.isFinite(viewportPadding)
+    ? Math.max(0, viewportPadding)
+    : hero ? 16 : 20;
+  const hiddenCodes = new Set(hiddenColorCodes);
+  const hiddenCells = new Set(hiddenCellKeys);
+  const highlightCodes = new Set(highlightColorCodes);
+  const hasHighlights = highlightCodes.size > 0;
+  const {
+    cropBackgroundCells,
+    visibleBounds,
+  } = buildVisibleArtworkBounds({
+    matrix,
+    gridWidth,
+    gridHeight,
+    hiddenCodes,
+    hiddenCells,
+    focusColorCode,
+    centerVisible: centerVisible && fitToViewport,
+    cropBackground: centerVisible && fitToViewport,
+    backgroundDeltaE,
+    visiblePaddingCells,
+  });
+
+  const fitGridWidth = visibleBounds
+    ? visibleBounds.maxColumn - visibleBounds.minColumn + 1
+    : gridWidth;
+  const fitGridHeight = visibleBounds
+    ? visibleBounds.maxRow - visibleBounds.minRow + 1
+    : gridHeight;
+  const drawMinColumn = visibleBounds ? visibleBounds.minColumn : 0;
+  const drawMaxColumn = visibleBounds ? visibleBounds.maxColumn : gridWidth - 1;
+  const drawMinRow = visibleBounds ? visibleBounds.minRow : 0;
+  const drawMaxRow = visibleBounds ? visibleBounds.maxRow : gridHeight - 1;
+  const cell = fitToViewport
+    ? getPreviewCellSize({
+      containerWidth: width,
+      containerHeight: availableHeight,
+      gridWidth: fitGridWidth,
+      gridHeight: fitGridHeight,
+      padding,
+    })
+    : Math.max(1, Math.floor(Math.max(1, width - padding * 2) / gridWidth));
+  const artworkWidth = cell * fitGridWidth;
+  const artworkHeight = cell * fitGridHeight;
+  const height = fitToViewport ? availableHeight : artworkHeight + padding * 2;
+  const context = setCanvasSize(canvas, width, height);
+  const offsetX = Math.floor((width - artworkWidth) / 2);
+  const verticalSpace = Math.max(0, height - artworkHeight);
+  const offsetY = fitToViewport
+    ? Math.floor(verticalSpace * (hero ? 0.38 : 0.5))
+    : padding;
+
+  context.clearRect(0, 0, width, height);
+  if (!transparentBackground) {
+    context.fillStyle = "rgba(255, 255, 255, 0.98)";
+    context.fillRect(0, 0, width, height);
+  }
+
+  matrix.forEach((row, rowIndex) => {
+    if (rowIndex < drawMinRow || rowIndex > drawMaxRow) return;
+
+    row.forEach((color, columnIndex) => {
+      if (columnIndex < drawMinColumn || columnIndex > drawMaxColumn) return;
+
+      const key = rowIndex * gridWidth + columnIndex;
+      const x = offsetX + (columnIndex - drawMinColumn) * cell;
+      const y = offsetY + (rowIndex - drawMinRow) * cell;
+      const radius = cell / 2;
+      const isHiddenCell = hiddenCells.has(key) || cropBackgroundCells.has(key);
+      const shouldDrawBead = Boolean(color && !hiddenCodes.has(color.code) && !isHiddenCell);
+
+      if (!transparentBackground) {
+        context.globalAlpha = 1;
+        context.fillStyle = "#ffffff";
+        context.fillRect(x, y, cell, cell);
+      }
+
+      if (!shouldDrawBead) return;
+
+      const isHighlighted = highlightCodes.has(color.code);
+      const beadAlpha = hasHighlights && !isHighlighted ? 0.16 : 1;
+      const beadFinish = !showGrid ? getPreviewBeadFinish(color) : null;
+
+      if (roundBeads) {
+        context.globalAlpha = beadAlpha;
+        if (!showGrid && beadFinish) {
+          context.fillStyle = beadFinish.boardShadowColor;
+          context.beginPath();
+          context.arc(x + radius, y + radius + cell * 0.06, Math.max(1.6, radius - 0.6), 0, Math.PI * 2);
+          context.fill();
+
+          const beadFill = context.createRadialGradient(
+            x + radius - cell * 0.18,
+            y + radius - cell * 0.22,
+            Math.max(1, radius * 0.2),
+            x + radius,
+            y + radius,
+            Math.max(2, radius)
+          );
+          beadFill.addColorStop(0, beadFinish.highlightColor);
+          beadFill.addColorStop(0.58, color.hex);
+          beadFill.addColorStop(1, beadFinish.shadowColor);
+          context.fillStyle = beadFill;
+        } else {
+          context.fillStyle = color.hex;
+        }
+
+        context.beginPath();
+        context.arc(x + radius, y + radius, Math.max(2, radius - 0.8), 0, Math.PI * 2);
+        context.fill();
+      } else {
+        context.globalAlpha = beadAlpha;
+        if (!showGrid && beadFinish) {
+          context.fillStyle = beadFinish.boardShadowColor;
+          context.fillRect(x + 1.6, y + 2.2, Math.max(2, cell - 3.2), Math.max(2, cell - 3.2));
+
+          const squareFill = context.createLinearGradient(x + 1, y + 1, x + cell - 1, y + cell - 1);
+          squareFill.addColorStop(0, beadFinish.highlightColor);
+          squareFill.addColorStop(0.52, color.hex);
+          squareFill.addColorStop(1, beadFinish.shadowColor);
+          context.fillStyle = squareFill;
+        } else {
+          context.fillStyle = color.hex;
+        }
+
+        context.fillRect(x + 1, y + 1, Math.max(2, cell - 2), Math.max(2, cell - 2));
+      }
+
+      if (!showGrid && beadFinish) {
+        context.globalAlpha = beadAlpha;
+        context.strokeStyle = beadFinish.rimColor;
+        context.lineWidth = Math.max(0.75, cell * beadFinish.rimWidthFactor);
+        if (roundBeads) {
+          context.beginPath();
+          context.arc(x + radius, y + radius, Math.max(2, radius - 0.6), 0, Math.PI * 2);
+          context.stroke();
+        } else {
+          context.strokeRect(x + 1.2, y + 1.2, Math.max(2, cell - 2.4), Math.max(2, cell - 2.4));
+        }
+      }
+
+      if (!hero && showGrid && cell >= 16) {
+        context.fillStyle = getBrightness(color) > 0.62 ? "#17181a" : "#ffffff";
+        context.font = `700 ${Math.max(7, Math.floor(cell * 0.28))}px "IBM Plex Mono", monospace`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(color.code, x + radius, y + radius + 0.5);
+      }
+
+      if (hasHighlights && isHighlighted) {
+        context.globalAlpha = 1;
+        context.strokeStyle = "rgba(8, 173, 134, 0.92)";
+        context.lineWidth = Math.max(1.6, cell * 0.13);
+        if (roundBeads) {
+          context.beginPath();
+          context.arc(x + radius, y + radius, Math.max(2, radius - 0.3), 0, Math.PI * 2);
+          context.stroke();
+        } else {
+          context.strokeRect(x + 1.5, y + 1.5, Math.max(2, cell - 3), Math.max(2, cell - 3));
+        }
+      }
+    });
+  });
+
+  if (!hero && showGrid) {
+    context.globalAlpha = 1;
+    context.strokeStyle = "rgba(16, 36, 31, 0.12)";
+    context.lineWidth = 1;
+    for (let index = 0; index <= fitGridWidth; index += 1) {
+      const x = offsetX + index * cell;
+      context.beginPath();
+      context.moveTo(x, offsetY);
+      context.lineTo(x, offsetY + artworkHeight);
+      context.stroke();
+    }
+    for (let index = 0; index <= fitGridHeight; index += 1) {
+      const y = offsetY + index * cell;
+      context.beginPath();
+      context.moveTo(offsetX, y);
+      context.lineTo(offsetX + artworkWidth, y);
+      context.stroke();
+    }
+
+    context.strokeStyle = "rgba(255, 90, 54, 0.44)";
+    context.lineWidth = 2;
+    for (let index = Math.ceil((drawMinColumn + 1) / 10) * 10; index <= drawMaxColumn; index += 10) {
+      const x = offsetX + (index - drawMinColumn) * cell;
+      context.beginPath();
+      context.moveTo(x, offsetY);
+      context.lineTo(x, offsetY + artworkHeight);
+      context.stroke();
+    }
+    for (let index = Math.ceil((drawMinRow + 1) / 10) * 10; index <= drawMaxRow; index += 10) {
+      const y = offsetY + (index - drawMinRow) * cell;
+      context.beginPath();
+      context.moveTo(offsetX, y);
+      context.lineTo(offsetX + artworkWidth, y);
+      context.stroke();
+    }
+  }
+  context.globalAlpha = 1;
+}
+
+export function renderPatternCanvas(canvas, {
+  matrix,
+  width: gridWidth,
+  height: gridHeight,
+  roundBeads,
+  showCodes,
+  centerVisible = false,
+  focusColorCode = "",
+  hero = false,
+  fitToViewport = false,
+  transparentBackground = false,
+  hiddenColorCodes = [],
+  hiddenCellKeys = [],
+  highlightColorCodes = [],
+  viewportPadding = null,
+  visiblePaddingCells = 0,
+}) {
+  if (!canvas || !matrix.length || !gridWidth || !gridHeight) return;
+
+  const viewportElement = fitToViewport ? canvas.parentElement : null;
+  const viewportSize = fitToViewport ? getViewportContentSize(viewportElement) : null;
+  const width = viewportSize?.width || viewportElement?.clientWidth || canvas.clientWidth || 320;
+  const availableHeight = viewportSize?.height || viewportElement?.clientHeight || canvas.clientHeight || Math.round(width * 1.04);
+  const padding = Number.isFinite(viewportPadding)
+    ? Math.max(0, viewportPadding)
+    : hero ? 16 : 20;
+  const hiddenCodes = new Set(hiddenColorCodes);
+  const hiddenCells = new Set(hiddenCellKeys);
+  const highlightCodes = new Set(highlightColorCodes);
+  const hasHighlights = highlightCodes.size > 0;
+  const {
+    cropBackgroundCells,
+    visibleBounds,
+  } = buildVisibleArtworkBounds({
+    matrix,
+    gridWidth,
+    gridHeight,
+    hiddenCodes,
+    hiddenCells,
+    focusColorCode,
+    centerVisible: centerVisible && fitToViewport,
+    cropBackground: centerVisible && fitToViewport,
+    backgroundDeltaE: 18,
+    visiblePaddingCells,
+  });
 
   const fitGridWidth = visibleBounds
     ? visibleBounds.maxColumn - visibleBounds.minColumn + 1
@@ -1365,6 +1587,40 @@ export function createExportCanvas({
 
     y += 34;
   });
+
+  const watermarkText = "拼豆.cn";
+  const watermarkPadding = 22;
+  const watermarkHeight = 42;
+  context.save();
+  context.font = '900 24px "Bricolage Grotesque", "Noto Sans SC", sans-serif';
+  const watermarkTextWidth = context.measureText(watermarkText).width;
+  const watermarkWidth = Math.ceil(watermarkTextWidth + 78);
+  const watermarkX = canvasWidth - padding - watermarkWidth;
+  const watermarkY = canvasHeight - padding - watermarkHeight;
+  context.fillStyle = "rgba(16, 36, 31, 0.06)";
+  context.beginPath();
+  context.roundRect(watermarkX, watermarkY, watermarkWidth, watermarkHeight, 21);
+  context.fill();
+
+  const dotY = watermarkY + watermarkHeight / 2;
+  const dotX = watermarkX + watermarkPadding;
+  [
+    { x: 0, y: -6, color: "#ff5a36" },
+    { x: 12, y: -6, color: "#f0c348" },
+    { x: 0, y: 6, color: "#00a77e" },
+    { x: 12, y: 6, color: "#7bc2ef" },
+  ].forEach((dot) => {
+    context.beginPath();
+    context.fillStyle = dot.color;
+    context.arc(dotX + dot.x, dotY + dot.y, 4.1, 0, Math.PI * 2);
+    context.fill();
+  });
+
+  context.fillStyle = "rgba(16, 36, 31, 0.7)";
+  context.textAlign = "right";
+  context.textBaseline = "middle";
+  context.fillText(watermarkText, watermarkX + watermarkWidth - 20, dotY + 0.5);
+  context.restore();
 
   return canvas;
 }

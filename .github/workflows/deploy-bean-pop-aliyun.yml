@@ -1,13 +1,6 @@
 name: Deploy Bean Pop To Aliyun
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - '.github/workflows/deploy-bean-pop-aliyun.yml'
-      - 'bean-pop-studio/**'
-      - 'ops/nginx/**'
   pull_request:
     branches:
       - master

@@ -1,16 +1,6 @@
 name: Monorepo CI
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/deploy-bean-pop-aliyun.yml'
-      - '.github/workflows/deploy-relay-drop-aliyun.yml'
-      - 'bean-pop-studio/**'
-      - 'ops/**'
-      - 'relay-drop/**'
   pull_request:
     branches:
       - master
