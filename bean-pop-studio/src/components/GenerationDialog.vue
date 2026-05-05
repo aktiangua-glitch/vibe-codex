@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { getPreviewCellSize } from "../lib/beadEngine.js";
 
 const props = defineProps({
@@ -91,6 +91,14 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  recommendedAspectLabel: {
+    type: String,
+    required: true,
+  },
+  recommendedMaxColors: {
+    type: Number,
+    required: true,
+  },
   ratios: {
     type: Object,
     required: true,
@@ -102,6 +110,10 @@ const props = defineProps({
   roundBeads: {
     type: Boolean,
     required: true,
+  },
+  sizePresets: {
+    type: Array,
+    default: () => [],
   },
   showCodes: {
     type: Boolean,
@@ -147,6 +159,7 @@ const emit = defineEmits([
   "next-step",
   "paint-region",
   "preview-colors",
+  "preview-layout-change",
   "previous-step",
   "undo-edit",
   "update:brand",
@@ -172,6 +185,7 @@ const mergeMode = ref(false);
 const mergeSelectedCodes = ref([]);
 const paintMode = ref(false);
 const paintColorCode = ref("");
+const toolDockPinned = ref(false);
 const paintDragStart = ref(null);
 const paintDragEnd = ref(null);
 const paintSelectionMetrics = ref(null);
@@ -179,6 +193,42 @@ const activeHiddenColorCodes = computed(() => {
   return [...new Set(props.hiddenColorCodes)];
 });
 const hiddenColorCount = computed(() => activeHiddenColorCodes.value.length);
+const currentColorLabel = computed(() => `${props.visibleColorCount}`);
+const currentBeadCountLabel = computed(() => props.totalBeads.toLocaleString("zh-CN"));
+const toolDockActionCount = computed(() => {
+  let count = 0;
+  if (props.backgroundColorCode) count += 1;
+  if (!paintMode.value) count += 1;
+  if (!mergeMode.value) count += 1;
+  if (paintMode.value || (props.canUndo && !mergeMode.value)) count += 1;
+  if (hiddenColorCount.value && !mergeMode.value && !paintMode.value) count += 1;
+  return count;
+});
+const toolDockExpanded = computed(() => toolDockPinned.value || mergeMode.value || paintMode.value);
+const toolDockHandleLabel = computed(() => (toolDockExpanded.value ? "收起" : "工具"));
+const toolDockHandleMeta = computed(() => (
+  paintMode.value ? "改点中" : mergeMode.value ? "合并中" : `${toolDockActionCount.value} 项`
+));
+const sizePresetOptions = computed(() => {
+  const candidates = [
+    ...props.sizePresets,
+    props.recommendedTargetWidth,
+    props.targetWidth,
+  ];
+  return [...new Set(candidates.filter((size) => (
+    Number.isFinite(size)
+    && size >= 18
+    && size <= props.maxTargetWidth
+  )))].sort((left, right) => left - right);
+});
+const colorPresetOptions = computed(() => {
+  const candidates = [12, 18, 24, 32, props.maxColorLimit];
+  return [...new Set(candidates.filter((count) => (
+    Number.isFinite(count)
+    && count >= 4
+    && count <= props.maxColorLimit
+  )))].sort((left, right) => left - right);
+});
 const mergeToolbarText = computed(() => {
   if (mergeMode.value) {
     return mergeSelectedCodes.value.length ? `已选 ${mergeSelectedCodes.value.length} 色` : "点选要合并的颜色";
@@ -229,6 +279,14 @@ const steps = [
   { key: "tune", label: "调整参数" },
   { key: "result", label: "拿到图纸" },
 ];
+
+function toggleToolDockPinned(event) {
+  if (mergeMode.value || paintMode.value) return;
+  toolDockPinned.value = !toolDockPinned.value;
+  if (!toolDockPinned.value) {
+    event?.currentTarget?.blur?.();
+  }
+}
 
 function openPicker() {
   fileInput.value?.click();
@@ -306,6 +364,7 @@ function resetInteractionState() {
   mergeSelectedCodes.value = [];
   paintMode.value = false;
   paintColorCode.value = "";
+  toolDockPinned.value = false;
   resetPaintDrag();
   syncPreviewHighlights();
   syncEditMode();
@@ -344,8 +403,8 @@ function setPaintMode(nextMode) {
     if (!paintColorCode.value && props.counts[0]?.code) {
       paintColorCode.value = props.counts[0].code;
     }
-    if (props.stageView === "original" || props.stageView === "prepared") {
-      emit("update:stageView", "result");
+    if (props.stageView !== "sheet") {
+      emit("update:stageView", "sheet");
     }
   } else {
     resetPaintDrag();
@@ -393,10 +452,9 @@ function confirmMergeColor() {
 function getCanvasMetrics(event, mode) {
   const canvas = event.currentTarget;
   const rect = canvas.getBoundingClientRect();
-  const canvasWidth = canvas.clientWidth || rect.width;
-  const canvasHeight = canvas.clientHeight || rect.height;
-  const isSheet = mode === "sheet";
-  const padding = isSheet ? 2 : 22;
+  const canvasWidth = rect.width || canvas.clientWidth;
+  const canvasHeight = rect.height || canvas.clientHeight;
+  const padding = 8;
   const cell = getPreviewCellSize({
     containerWidth: canvasWidth,
     containerHeight: canvasHeight,
@@ -425,8 +483,8 @@ function getCanvasCellFromPointer(event, mode) {
 
   const canvas = event.currentTarget;
   const rect = canvas.getBoundingClientRect();
-  const canvasWidth = canvas.clientWidth || rect.width;
-  const canvasHeight = canvas.clientHeight || rect.height;
+  const canvasWidth = rect.width || canvas.clientWidth;
+  const canvasHeight = rect.height || canvas.clientHeight;
   const pointerX = (event.clientX - rect.left) * (canvasWidth / rect.width);
   const pointerY = (event.clientY - rect.top) * (canvasHeight / rect.height);
   const metrics = getCanvasMetrics(event, mode);
@@ -538,6 +596,23 @@ watch(
     resetInteractionState();
   }
 );
+
+watch(
+  () => props.stageView,
+  () => {
+    if (!mergeMode.value && !paintMode.value) {
+      toolDockPinned.value = false;
+    }
+  }
+);
+
+watch(
+  () => props.open,
+  (nextOpen) => {
+    if (!nextOpen) return;
+    toolDockPinned.value = false;
+  }
+);
 </script>
 
 <template>
@@ -586,7 +661,9 @@ watch(
 
           <div v-show="currentStep === 'upload'" class="flow-panel flow-panel-upload">
             <div class="flow-copy upload-primer">
-              <span class="upload-kicker">开始制作</span>
+              <button class="upload-kicker" type="button" @click="openPicker">
+                上传照片
+              </button>
               <h3>上传照片生成图纸</h3>
               <p>自动生成成品预览、色号和颗数。满意就下载开拼。</p>
             </div>
@@ -621,7 +698,7 @@ watch(
                     type="button"
                     @click="updateTargetWidth(recommendedTargetWidth)"
                   >
-                    推荐 {{ recommendedTargetWidth }}
+                    图片推荐 {{ recommendedTargetWidth }}
                   </button>
                 </div>
                 <input
@@ -647,12 +724,34 @@ watch(
                     @change="updateTargetWidth($event.target.value)"
                   />
                 </div>
+                <div class="choice-row choice-row-wrap">
+                  <button
+                    v-for="size in sizePresetOptions"
+                    :key="size"
+                    class="chip-button"
+                    :class="{ 'is-active': targetWidth === size }"
+                    type="button"
+                    @click="updateTargetWidth(size)"
+                  >
+                    {{ size }} 格
+                  </button>
+                </div>
+                <small class="field-note">图片分析建议先从 {{ recommendedAspectLabel }} 左右开始，不是按当前参数反推。29 格约等于 1 块 29×29 方板，58 / 87 / 116 更适合头像和礼物图。</small>
               </label>
 
               <label class="flow-control-block flow-control-block-primary">
                 <div class="field-titleline">
                   <span class="field-label">最大颜色数</span>
-                  <span class="parameter-badge">最多 {{ maxColorLimit }} 色</span>
+                  <div class="choice-row">
+                    <button
+                      class="parameter-badge parameter-badge-button"
+                      type="button"
+                      @click="updateMaxColors(recommendedMaxColors)"
+                    >
+                      图片推荐 {{ recommendedMaxColors }}
+                    </button>
+                    <span class="parameter-badge">当前品牌 {{ maxColorLimit }} 色</span>
+                  </div>
                 </div>
                 <input
                   class="range-input"
@@ -676,6 +775,18 @@ watch(
                     step="1"
                     @change="updateMaxColors($event.target.value)"
                   />
+                </div>
+                <div class="choice-row choice-row-wrap">
+                  <button
+                    v-for="count in colorPresetOptions"
+                    :key="count"
+                    class="chip-button"
+                    :class="{ 'is-active': maxColors === count }"
+                    type="button"
+                    @click="updateMaxColors(count)"
+                  >
+                    {{ count }} 色
+                  </button>
                 </div>
               </label>
 
@@ -792,87 +903,113 @@ watch(
                     'is-sheet-view': stageView === 'sheet',
                   }"
                 >
-                  <div class="canvas-tool-dock" :class="{ 'is-editing': mergeMode || paintMode }">
+                  <div
+                    class="canvas-tool-dock"
+                    :class="{ 'is-editing': mergeMode || paintMode, 'is-pinned': toolDockPinned }"
+                  >
                     <button
-                      v-if="backgroundColorCode"
-                      class="canvas-inline-switch"
-                      :class="{ 'is-active': hideBackgroundBeads }"
-                      :aria-label="hideBackgroundBeads ? '显示底色' : '隐藏底色'"
-                      :aria-pressed="hideBackgroundBeads"
+                      class="canvas-tool-handle"
+                      :aria-expanded="toolDockExpanded"
+                      :disabled="mergeMode || paintMode"
                       type="button"
-                      @click="$emit('update:hideBackgroundBeads', !hideBackgroundBeads)"
+                      @click="toggleToolDockPinned"
                     >
-                      <span class="canvas-inline-switch-track" aria-hidden="true"></span>
-                      <span class="canvas-inline-switch-text">底色</span>
+                      <span class="canvas-tool-handle-glyph" aria-hidden="true"></span>
+                      <span class="canvas-tool-handle-copy">
+                        <strong>{{ toolDockHandleLabel }}</strong>
+                        <small>{{ toolDockHandleMeta }}</small>
+                      </span>
                     </button>
-                    <div class="canvas-tool-actions" aria-label="画布编辑工具">
+                    <div class="canvas-tool-dock-body">
                       <button
-                        v-if="!paintMode"
-                        class="canvas-tool-button"
-                        :class="{ 'is-active': mergeMode }"
+                        v-if="backgroundColorCode"
+                        class="canvas-inline-switch"
+                        :class="{ 'is-active': hideBackgroundBeads }"
+                        :aria-label="hideBackgroundBeads ? '显示底色' : '隐藏底色'"
+                        :aria-pressed="hideBackgroundBeads"
                         type="button"
-                        @click="toggleMergeMode"
+                        @click="$emit('update:hideBackgroundBeads', !hideBackgroundBeads)"
                       >
-                        {{ mergeMode ? "取消合并" : "合并颜色" }}
+                        <span class="canvas-inline-switch-track" aria-hidden="true"></span>
+                        <span class="canvas-inline-switch-text">底色</span>
                       </button>
-                      <button
-                        v-if="!mergeMode"
-                        class="canvas-tool-button"
-                        :class="{ 'is-active': paintMode }"
-                        type="button"
-                        @click="togglePaintMode"
-                      >
-                        {{ paintMode ? "完成改点" : "改豆点" }}
-                      </button>
-                      <button
-                        v-if="paintMode || (canUndo && !mergeMode)"
-                        class="canvas-tool-button"
-                        type="button"
-                        :disabled="!canUndo"
-                        @click="$emit('undo-edit')"
-                      >
-                        撤销
-                      </button>
-                      <button
-                        v-if="hiddenColorCount && !mergeMode && !paintMode"
-                        class="canvas-tool-button"
-                        type="button"
-                        @click="showAllColors"
-                      >
-                        显示全部
-                      </button>
+                      <div class="canvas-tool-actions" aria-label="画布编辑工具">
+                        <button
+                          v-if="!paintMode"
+                          class="canvas-tool-button"
+                          :class="{ 'is-active': mergeMode }"
+                          type="button"
+                          @click="toggleMergeMode"
+                        >
+                          {{ mergeMode ? "取消合并" : "合并颜色" }}
+                        </button>
+                        <button
+                          v-if="!mergeMode"
+                          class="canvas-tool-button"
+                          :class="{ 'is-active': paintMode }"
+                          type="button"
+                          @click="togglePaintMode"
+                        >
+                          {{ paintMode ? "完成改点" : "改豆点" }}
+                        </button>
+                        <button
+                          v-if="paintMode || (canUndo && !mergeMode)"
+                          class="canvas-tool-button"
+                          type="button"
+                          :disabled="!canUndo"
+                          @click="$emit('undo-edit')"
+                        >
+                          撤销
+                        </button>
+                        <button
+                          v-if="hiddenColorCount && !mergeMode && !paintMode"
+                          class="canvas-tool-button"
+                          type="button"
+                          @click="showAllColors"
+                        >
+                          显示全部
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div v-if="paintMode" class="paint-mode-chip">
                     <span>改豆点</span>
                     <strong>{{ paintColorCode || "选色号" }}</strong>
                   </div>
-                  <canvas
-                    v-show="stageView === 'result'"
-                    ref="resultCanvas"
-                    class="canvas-surface"
-                    @pointercancel="handlePaintPointerCancel"
-                    @pointerdown="handlePaintPointerDown($event, 'result')"
-                    @pointermove="handlePaintPointerMove($event, 'result')"
-                    @pointerup="handlePaintPointerUp($event, 'result')"
-                  ></canvas>
-                  <canvas
-                    v-show="stageView === 'sheet'"
-                    ref="patternCanvas"
-                    class="canvas-sheet"
-                    @pointercancel="handlePaintPointerCancel"
-                    @pointerdown="handlePaintPointerDown($event, 'sheet')"
-                    @pointermove="handlePaintPointerMove($event, 'sheet')"
-                    @pointerup="handlePaintPointerUp($event, 'sheet')"
-                  ></canvas>
                   <div
-                    v-if="paintSelectionStyle"
-                    class="paint-selection-box"
-                    :style="paintSelectionStyle"
-                    aria-hidden="true"
-                  ></div>
-                  <canvas v-show="stageView === 'original'" ref="sourceCanvas" class="canvas-surface"></canvas>
-                  <canvas v-show="stageView === 'prepared'" ref="preparedCanvas" class="canvas-surface"></canvas>
+                    class="flow-preview-scroll"
+                    :class="{
+                      'is-result-view': stageView === 'result',
+                      'is-sheet-view': stageView === 'sheet',
+                    }"
+                  >
+                    <canvas
+                      v-show="stageView === 'result'"
+                      ref="resultCanvas"
+                      class="canvas-surface"
+                      @pointercancel="handlePaintPointerCancel"
+                      @pointerdown="handlePaintPointerDown($event, 'result')"
+                      @pointermove="handlePaintPointerMove($event, 'result')"
+                      @pointerup="handlePaintPointerUp($event, 'result')"
+                    ></canvas>
+                    <canvas
+                      v-show="stageView === 'sheet'"
+                      ref="patternCanvas"
+                      class="canvas-sheet"
+                      @pointercancel="handlePaintPointerCancel"
+                      @pointerdown="handlePaintPointerDown($event, 'sheet')"
+                      @pointermove="handlePaintPointerMove($event, 'sheet')"
+                      @pointerup="handlePaintPointerUp($event, 'sheet')"
+                    ></canvas>
+                    <div
+                      v-if="paintSelectionStyle"
+                      class="paint-selection-box"
+                      :style="paintSelectionStyle"
+                      aria-hidden="true"
+                    ></div>
+                    <canvas v-show="stageView === 'original'" ref="sourceCanvas" class="canvas-surface"></canvas>
+                    <canvas v-show="stageView === 'prepared'" ref="preparedCanvas" class="canvas-surface"></canvas>
+                  </div>
                   <div v-if="processing" class="stage-processing">
                     <strong>正在更新结果</strong>
                     <span>新的成品感和图纸马上出现。</span>
@@ -886,34 +1023,36 @@ watch(
               >
                 <div class="flow-result-cards">
                   <button
-                    class="flow-result-card flow-result-card-button"
-                    data-hint="调整"
+                    class="flow-result-card flow-result-card-button flow-result-overview"
                     type="button"
-                    aria-label="调整成品尺寸"
+                    aria-label="调整图纸参数"
                     @click="$emit('next-step', 'tune')"
                   >
-                    <span>尺寸</span>
-                    <strong>{{ width }} × {{ height }}</strong>
-                  </button>
-                  <button
-                    class="flow-result-card flow-result-card-button"
-                    data-hint="调整"
-                    type="button"
-                    aria-label="调整颜色数量"
-                    @click="$emit('next-step', 'tune')"
-                  >
-                    <span>颜色</span>
-                    <strong>{{ visibleColorCount }} 色</strong>
-                  </button>
-                  <button
-                    class="flow-result-card flow-result-card-button"
-                    data-hint="随尺寸变化"
-                    type="button"
-                    aria-label="查看豆子数量相关参数"
-                    @click="$emit('next-step', 'tune')"
-                  >
-                    <span>颗数</span>
-                    <strong>{{ totalBeads.toLocaleString("zh-CN") }}</strong>
+                    <div class="flow-result-overview-head">
+                      <div class="flow-result-overview-copy">
+                        <span>图纸规格</span>
+                        <small>点一下回到参数页微调</small>
+                      </div>
+                      <span class="flow-result-overview-trigger">调整参数</span>
+                    </div>
+                    <div class="flow-result-overview-strip" aria-hidden="true">
+                      <div class="flow-result-overview-metric flow-result-overview-metric-size">
+                        <span>尺寸</span>
+                        <strong class="flow-result-overview-size">
+                          <b>{{ props.width }}</b>
+                          <i>×</i>
+                          <b>{{ props.height }}</b>
+                        </strong>
+                      </div>
+                      <div class="flow-result-overview-metric">
+                        <span>颜色</span>
+                        <strong>{{ currentColorLabel }}</strong>
+                      </div>
+                      <div class="flow-result-overview-metric">
+                        <span>颗数</span>
+                        <strong>{{ currentBeadCountLabel }}</strong>
+                      </div>
+                    </div>
                   </button>
                 </div>
 

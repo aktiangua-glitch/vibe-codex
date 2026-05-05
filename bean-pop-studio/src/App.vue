@@ -20,6 +20,7 @@ import {
   framingPresets,
   stylePresets,
 } from "./lib/imagePrep.js";
+import { getRecommendedTargetWidth } from "./lib/recommendation.js";
 import {
   loadSavedProjects,
   persistSavedProjects,
@@ -37,7 +38,8 @@ const config = reactive({
   targetWidth: 32,
 });
 
-const MAX_TARGET_SIZE = 120;
+const MAX_TARGET_SIZE = 145;
+const BOARD_GUIDE_SIZES = [29, 58, 87, 116, 145];
 
 const prep = reactive({
   cropRatio: "auto",
@@ -267,6 +269,9 @@ const previewFocusColorCode = computed(() => {
 const activeHiddenColorCodes = computed(() => {
   return config.hiddenColorCodes.filter((code) => result.counts.some((entry) => entry.code === code));
 });
+const shouldFocusVisibleArtwork = computed(() => (
+  canvasEditMode.value !== "paint" && config.hideBackgroundBeads
+));
 const backgroundHiddenCellKeys = computed(() => {
   if (!config.hideBackgroundBeads || !backgroundColorCode.value) return [];
   return detectBackgroundCellKeys(result.matrix, result.width, result.height, backgroundColorCode.value);
@@ -283,23 +288,48 @@ const visibleCounts = computed(() => {
 const totalBeads = computed(() => sumBeadCounts(visibleCounts.value));
 const heroDemoTotalBeads = computed(() => sumBeadCounts(heroDemoResult.counts));
 const selectedBrandColorLimit = computed(() => palettes[config.brand]?.length || 36);
+const tuneSizePresets = computed(() => BOARD_GUIDE_SIZES.filter((size) => size <= MAX_TARGET_SIZE));
 const recommendedTargetWidth = computed(() => {
+  return getRecommendedTargetWidth({
+    boardSizes: BOARD_GUIDE_SIZES,
+    imageHeight: rawImage.value?.height || 0,
+    imageWidth: rawImage.value?.width || 0,
+    maxTargetSize: MAX_TARGET_SIZE,
+    subjectBox: subjectBox.value,
+  });
+});
+const recommendedGridSize = computed(() => {
+  if (!preparedSource.value || !recommendedTargetWidth.value) {
+    return {
+      width: recommendedTargetWidth.value,
+      height: recommendedTargetWidth.value,
+    };
+  }
+  return getScaledGridSize(preparedSource.value, recommendedTargetWidth.value);
+});
+const recommendedAspectLabel = computed(() => (
+  `${recommendedGridSize.value.width} × ${recommendedGridSize.value.height}`
+));
+const recommendedMaxColors = computed(() => {
+  const limit = selectedBrandColorLimit.value;
   const source = rawImage.value;
-  if (!source?.width || !source?.height) return 48;
+  if (!source?.width || !source?.height) return Math.min(18, limit);
 
   const longSide = Math.max(source.width, source.height);
-  const aspect = longSide / Math.max(1, Math.min(source.width, source.height));
-  let size = 48;
+  const shortSide = Math.max(1, Math.min(source.width, source.height));
+  const aspect = longSide / shortSide;
+  let count = 16;
 
-  if (longSide >= 3600) size = 104;
-  else if (longSide >= 2600) size = 88;
-  else if (longSide >= 1800) size = 72;
-  else if (longSide >= 1000) size = 64;
+  if (recommendedTargetWidth.value >= 116) count = 28;
+  else if (recommendedTargetWidth.value >= 87) count = 24;
+  else if (recommendedTargetWidth.value >= 58) count = 18;
+  else count = 12;
 
-  if (aspect >= 1.45) size += 8;
-  if (subjectBox.value?.confidence >= 0.55) size -= 8;
+  if (longSide >= 2800) count += 4;
+  if (aspect >= 1.5) count += 2;
+  if (subjectBox.value?.confidence < 0.42) count += 2;
 
-  return Math.max(32, Math.min(MAX_TARGET_SIZE, Math.round(size / 8) * 8));
+  return Math.max(8, Math.min(limit, Math.round(count / 2) * 2));
 });
 const projectTitle = computed(() => {
   const customTitle = config.projectName.trim();
@@ -401,12 +431,16 @@ function renderAllCanvases() {
     height: result.height,
     roundBeads: config.roundBeads,
     hero: false,
+    fitToViewport: true,
     showGrid: canvasEditMode.value === "paint",
     hiddenColorCodes: activeHiddenColorCodes.value,
     hiddenCellKeys: backgroundHiddenCellKeys.value,
     highlightColorCodes: mergePreviewColorCodes.value,
-    centerVisible: canvasEditMode.value !== "paint",
-    focusColorCode: canvasEditMode.value === "paint" ? "" : previewFocusColorCode.value,
+    centerVisible: shouldFocusVisibleArtwork.value,
+    focusColorCode: shouldFocusVisibleArtwork.value ? previewFocusColorCode.value : "",
+    viewportPadding: canvasEditMode.value === "paint" ? 8 : 16,
+    backgroundDeltaE: 18,
+    visiblePaddingCells: canvasEditMode.value === "paint" ? 0 : 0,
   });
   renderPatternCanvas(dialogCanvases.pattern, {
     matrix: result.matrix,
@@ -414,15 +448,15 @@ function renderAllCanvases() {
     height: result.height,
     roundBeads: config.roundBeads,
     showCodes: true,
-    centerVisible: canvasEditMode.value !== "paint",
+    centerVisible: shouldFocusVisibleArtwork.value,
     fitToViewport: true,
     hero: false,
     hiddenColorCodes: activeHiddenColorCodes.value,
     hiddenCellKeys: backgroundHiddenCellKeys.value,
     highlightColorCodes: mergePreviewColorCodes.value,
-    focusColorCode: canvasEditMode.value === "paint" ? "" : previewFocusColorCode.value,
-    viewportPadding: 2,
-    visiblePaddingCells: canvasEditMode.value === "paint" ? 0 : 1,
+    focusColorCode: shouldFocusVisibleArtwork.value ? previewFocusColorCode.value : "",
+    viewportPadding: canvasEditMode.value === "paint" ? 8 : 16,
+    visiblePaddingCells: canvasEditMode.value === "paint" ? 0 : 2,
   });
 }
 
@@ -622,6 +656,7 @@ async function loadImageFromDataUrl(dataUrl, label, {
     clearEditState();
     if (autoRecommendSize) {
       config.targetWidth = recommendedTargetWidth.value;
+      config.maxColors = recommendedMaxColors.value;
     }
   }
 
@@ -847,7 +882,7 @@ function exportPng() {
       }
       const fileSafeTitle = projectTitle.value.replace(/\s+/g, "-");
       const hiddenSuffix = activeHiddenColorCodes.value.length || backgroundHiddenCellKeys.value.length ? "-hidden" : "";
-      downloadBlob(blob, `${fileSafeTitle || "bean-pop"}-${config.brand.toLowerCase()}-${result.width}x${result.height}${hiddenSuffix}.png`);
+      downloadBlob(blob, `${fileSafeTitle || "pingdou-cn"}-${config.brand.toLowerCase()}-${result.width}x${result.height}${hiddenSuffix}.png`);
       actionState.value = "";
       pushToast("图纸图片已开始下载。");
     }, "image/png");
@@ -1067,8 +1102,8 @@ onBeforeUnmount(() => {
     <a class="site-corner-brand" href="#top">
       <span class="brand-mark"></span>
       <span class="hero-masthead-copy">
-        <strong>Bean Pop</strong>
-        <small>拼豆图纸</small>
+        <strong>拼豆.cn</strong>
+        <small>在线出图纸</small>
       </span>
     </a>
 
@@ -1076,7 +1111,7 @@ onBeforeUnmount(() => {
       <a class="brand-lockup" href="#top">
         <span class="brand-mark"></span>
         <span class="brand-copy">
-          <strong>Bean Pop</strong>
+          <strong>拼豆.cn</strong>
           <small>照片转拼豆图纸</small>
         </span>
       </a>
@@ -1268,10 +1303,13 @@ onBeforeUnmount(() => {
       :open="flowOpen"
       :prepared-label="preparedLabel"
       :processing="processing"
+      :recommended-aspect-label="recommendedAspectLabel"
+      :recommended-max-colors="recommendedMaxColors"
       :ratios="cropRatioPresets"
       :recommended-target-width="recommendedTargetWidth"
       :round-beads="config.roundBeads"
       :show-codes="config.showCodes"
+      :size-presets="tuneSizePresets"
       :stage-view="config.stageView"
       :style-mode="prep.styleMode"
       :style-presets="stylePresets"
@@ -1287,6 +1325,7 @@ onBeforeUnmount(() => {
       @next-step="handleFlowNext"
       @paint-region="handlePaintRegion"
       @preview-colors="handlePreviewColors"
+      @preview-layout-change="scheduleRender"
       @previous-step="handleFlowPrevious"
       @undo-edit="handleUndoEdit"
       @update:brand="config.brand = $event"
