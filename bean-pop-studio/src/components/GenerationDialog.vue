@@ -736,7 +736,6 @@ watch(
                     {{ size }} 格
                   </button>
                 </div>
-                <small class="field-note">图片分析建议先从 {{ recommendedAspectLabel }} 左右开始，不是按当前参数反推。29 格约等于 1 块 29×29 方板，58 / 87 / 116 更适合头像和礼物图。</small>
               </label>
 
               <label class="flow-control-block flow-control-block-primary">

@@ -30,6 +30,18 @@ describe("recommendation", () => {
     })).toBe(116);
   });
 
+  it("leans larger for mid-sized photos so the generated pattern stays readable", () => {
+    expect(getRecommendedTargetWidth({
+      imageWidth: 1600,
+      imageHeight: 1600,
+      subjectBox: {
+        width: 0.78,
+        height: 0.86,
+        confidence: 0.88,
+      },
+    })).toBe(116);
+  });
+
   it("boosts transparent small subjects more aggressively for a cleaner final effect", () => {
     expect(getRecommendedTargetWidth({
       imageWidth: 1400,

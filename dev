@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# vibe-codex 启动入口：转到 Node 启动器
+exec node "$(dirname "$0")/start.js" "$@"

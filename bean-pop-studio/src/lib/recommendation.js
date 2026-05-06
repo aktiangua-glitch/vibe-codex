@@ -5,7 +5,7 @@ const DEFAULT_SUBJECT_BOX = {
 };
 
 export const DEFAULT_BOARD_GUIDE_SIZES = [29, 58, 87, 116, 145];
-const DEFAULT_LARGER_SIZE_BIAS = 10;
+const DEFAULT_LARGER_SIZE_BIAS = 14;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -60,7 +60,7 @@ export function getRecommendedTargetWidth({
 
   if (longSide >= 4200) size = 145;
   else if (longSide >= 3000) size = 116;
-  else if (longSide >= 1800) size = 87;
+  else if (longSide >= 1400) size = 87;
   else if (longSide < 960) size = 29;
 
   size += DEFAULT_LARGER_SIZE_BIAS;
