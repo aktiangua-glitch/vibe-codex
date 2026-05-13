@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import CommunityShowcase from "./components/CommunityShowcase.vue";
 import GenerationDialog from "./components/GenerationDialog.vue";
 import { communityCategories } from "./data/communitySeeds.js";
-import { brandMeta, palettes } from "./data/palettes.js";
+import { brandMeta, getBrandOutputColorLimit } from "./data/palettes.js";
 import {
   createExportCanvas,
   createSampleDataUrl,
@@ -299,7 +299,7 @@ const visibleCounts = computed(() => {
 });
 const totalBeads = computed(() => sumBeadCounts(visibleCounts.value));
 const heroDemoTotalBeads = computed(() => sumBeadCounts(heroDemoResult.counts));
-const selectedBrandColorLimit = computed(() => palettes[config.brand]?.length || 36);
+const selectedBrandColorLimit = computed(() => getBrandOutputColorLimit(config.brand) || 36);
 const tuneSizePresets = computed(() => BOARD_GUIDE_SIZES.filter((size) => size <= MAX_TARGET_SIZE));
 const recommendedTargetWidth = computed(() => {
   return getRecommendedTargetWidth({
