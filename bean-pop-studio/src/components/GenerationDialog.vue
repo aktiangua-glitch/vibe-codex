@@ -209,6 +209,7 @@ const toolDockHandleLabel = computed(() => (toolDockExpanded.value ? "收起" : 
 const toolDockHandleMeta = computed(() => (
   paintMode.value ? "改点中" : mergeMode.value ? "合并中" : `${toolDockActionCount.value} 项`
 ));
+const activeBrandMeta = computed(() => props.brandMeta?.[props.brand] || null);
 const sizePresetOptions = computed(() => {
   const candidates = [
     ...props.sizePresets,
@@ -222,12 +223,19 @@ const sizePresetOptions = computed(() => {
   )))].sort((left, right) => left - right);
 });
 const colorPresetOptions = computed(() => {
-  const candidates = [12, 18, 24, 32, props.maxColorLimit];
+  const candidates = [
+    ...(activeBrandMeta.value?.recommendedColorCounts || []),
+    props.recommendedMaxColors,
+    props.maxColorLimit,
+  ];
   return [...new Set(candidates.filter((count) => (
     Number.isFinite(count)
     && count >= 4
     && count <= props.maxColorLimit
   )))].sort((left, right) => left - right);
+});
+const brandPaletteSummary = computed(() => {
+  return `建议最多 ${props.maxColorLimit} 色`;
 });
 const mergeToolbarText = computed(() => {
   if (mergeMode.value) {
@@ -736,7 +744,6 @@ watch(
                     {{ size }} 格
                   </button>
                 </div>
-                <small class="field-note">图片分析建议先从 {{ recommendedAspectLabel }} 左右开始，不是按当前参数反推。29 格约等于 1 块 29×29 方板，58 / 87 / 116 更适合头像和礼物图。</small>
               </label>
 
               <label class="flow-control-block flow-control-block-primary">
@@ -750,7 +757,7 @@ watch(
                     >
                       图片推荐 {{ recommendedMaxColors }}
                     </button>
-                    <span class="parameter-badge">当前品牌 {{ maxColorLimit }} 色</span>
+                    <span class="parameter-badge">{{ brandPaletteSummary }}</span>
                   </div>
                 </div>
                 <input

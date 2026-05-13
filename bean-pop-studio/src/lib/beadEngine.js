@@ -1373,7 +1373,7 @@ export function renderPatternCanvas(canvas, {
   const verticalSpace = Math.max(0, height - sheetHeight);
   let offsetX = Math.floor((width - sheetWidth) / 2);
   let offsetY = fitToViewport
-    ? Math.floor(verticalSpace * (hero ? 0.38 : 0.5))
+    ? Math.floor(verticalSpace * (hero ? 0.24 : 0.5))
     : padding;
 
   context.clearRect(0, 0, width, height);

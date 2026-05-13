@@ -1,7 +1,9 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import CommunityShowcase from "./components/CommunityShowcase.vue";
 import GenerationDialog from "./components/GenerationDialog.vue";
-import { brandMeta, palettes } from "./data/palettes.js";
+import { communityCategories } from "./data/communitySeeds.js";
+import { brandMeta, getBrandOutputColorLimit } from "./data/palettes.js";
 import {
   createExportCanvas,
   createSampleDataUrl,
@@ -20,6 +22,7 @@ import {
   framingPresets,
   stylePresets,
 } from "./lib/imagePrep.js";
+import { createCommunitySourceDataUrl, getCommunitySourceSubjectBox } from "./lib/communitySources.js";
 import { getRecommendedTargetWidth } from "./lib/recommendation.js";
 import {
   loadSavedProjects,
@@ -107,6 +110,15 @@ let toastCounter = 0;
 const demoSteps = ["source", "result", "sheet"];
 const flowSteps = ["upload", "tune", "result"];
 const heroDemoLabel = "红帽小勇者";
+const currentPath = typeof window !== "undefined" ? window.location.pathname : "/";
+const isCommunityPage = /^\/community(?:\/|$)/.test(currentPath);
+const homePageHref = isCommunityPage ? "../" : "#top";
+const communityPageHref = isCommunityPage ? "#community" : "./community/";
+
+if (typeof document !== "undefined") {
+  document.documentElement.classList.toggle("is-community-route", isCommunityPage);
+  document.body.classList.toggle("is-community-route", isCommunityPage);
+}
 
 function sumBeadCounts(counts) {
   return counts.reduce((sum, item) => sum + item.count, 0);
@@ -287,7 +299,7 @@ const visibleCounts = computed(() => {
 });
 const totalBeads = computed(() => sumBeadCounts(visibleCounts.value));
 const heroDemoTotalBeads = computed(() => sumBeadCounts(heroDemoResult.counts));
-const selectedBrandColorLimit = computed(() => palettes[config.brand]?.length || 36);
+const selectedBrandColorLimit = computed(() => getBrandOutputColorLimit(config.brand) || 36);
 const tuneSizePresets = computed(() => BOARD_GUIDE_SIZES.filter((size) => size <= MAX_TARGET_SIZE));
 const recommendedTargetWidth = computed(() => {
   return getRecommendedTargetWidth({
@@ -350,32 +362,10 @@ const preparedLabel = computed(() => {
 const heroGuide = computed(() => {
   return {
     badge: "打开就能试",
-    title: "选照片，直接出图纸",
-    text: "先看成品、色号和颗数，满意就下载开拼。",
+    text: "上传一张照片，直接看到成品、色号和图纸。",
   };
 });
-const onboardingSteps = computed(() => {
-  return [
-    {
-      id: "01",
-      title: "选照片",
-      detail: "拖进来即可",
-      state: "current",
-    },
-    {
-      id: "02",
-      title: "看成品",
-      detail: "先判断像不像",
-      state: "todo",
-    },
-    {
-      id: "03",
-      title: "拿图纸",
-      detail: "色号颗数带走",
-      state: "todo",
-    },
-  ];
-});
+const heroCommunityTags = computed(() => communityCategories.filter((item) => item !== "全部"));
 
 function resetHiddenColorState() {
   config.hiddenColorCodes = [];
@@ -643,12 +633,13 @@ function createMarketingDemoDataUrl() {
 async function loadImageFromDataUrl(dataUrl, label, {
   autoRecommendSize = true,
   preserveCurrentProject = false,
+  subjectOverride = null,
 } = {}) {
   const loadedImage = await createImageFromDataUrl(dataUrl);
   rawImage.value = loadedImage;
   imageLabel.value = label;
   imageDataUrl.value = dataUrl;
-  subjectBox.value = await analyzeImageSubject(loadedImage);
+  subjectBox.value = subjectOverride || await analyzeImageSubject(loadedImage);
 
   if (!preserveCurrentProject) {
     currentProjectId.value = null;
@@ -732,6 +723,44 @@ async function handleSelectedFile(file) {
 
 function triggerHeroUpload() {
   openGenerationFlow("upload");
+}
+
+async function handleLaunchCommunitySeed(payload) {
+  if (!payload || payload.sourceKind === "upload") {
+    triggerHeroUpload();
+    return;
+  }
+
+  try {
+    config.projectName = payload.label || "社区示例图纸";
+    config.brand = payload.brand || "MARD";
+    config.maxColors = payload.maxColors || 12;
+    config.targetWidth = payload.targetWidth || 32;
+    prep.cropRatio = payload.cropRatio || "auto";
+    prep.framing = payload.framing || "balanced";
+    prep.styleMode = payload.styleMode || "clean_ink";
+    prep.zoomAdjust = 1;
+    prep.offsetX = 0;
+    prep.offsetY = 0;
+
+    await loadImageFromDataUrl(
+      createCommunitySourceDataUrl(payload.sourceKind),
+      `${payload.label || "社区示例"}.png`,
+      {
+        autoRecommendSize: false,
+        subjectOverride: getCommunitySourceSubjectBox(payload.sourceKind),
+      }
+    );
+
+    config.stageView = "result";
+    flowOpen.value = true;
+    flowStep.value = "result";
+    pushToast(`已加载“${payload.label}”示例，可以继续调整。`);
+  } catch (error) {
+    console.error(error);
+    pushToast("示例加载失败，请直接上传照片试试。");
+    triggerHeroUpload();
+  }
 }
 
 function openGenerationFlow(step) {
@@ -1072,8 +1101,10 @@ onMounted(async () => {
   canvasResizeObserver = new ResizeObserver(() => {
     scheduleRender();
   });
-  await bootMarketingDemo();
-  await bootSampleImage();
+  if (!isCommunityPage) {
+    await bootMarketingDemo();
+    await bootSampleImage();
+  }
   [
     heroSourceCanvas.value,
     heroResultCanvas.value,
@@ -1084,10 +1115,16 @@ onMounted(async () => {
   handleScroll();
   window.setTimeout(handleScroll, 120);
   window.setTimeout(scheduleRender, 180);
-  startDemoCycle();
+  if (!isCommunityPage) {
+    startDemoCycle();
+  }
 });
 
 onBeforeUnmount(() => {
+  if (typeof document !== "undefined") {
+    document.documentElement.classList.remove("is-community-route");
+    document.body.classList.remove("is-community-route");
+  }
   window.removeEventListener("resize", handleResize);
   window.removeEventListener("scroll", handleScroll);
   canvasResizeObserver?.disconnect();
@@ -1098,8 +1135,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell">
-    <a class="site-corner-brand" href="#top">
+  <div class="app-shell" :class="{ 'is-community-page': isCommunityPage }">
+    <a class="site-corner-brand" :href="homePageHref">
       <span class="brand-mark"></span>
       <span class="hero-masthead-copy">
         <strong>拼豆.cn</strong>
@@ -1107,8 +1144,8 @@ onBeforeUnmount(() => {
       </span>
     </a>
 
-    <header class="site-header" :class="{ 'is-visible': headerVisible }">
-      <a class="brand-lockup" href="#top">
+    <header v-if="!isCommunityPage" class="site-header" :class="{ 'is-visible': headerVisible }">
+      <a class="brand-lockup" :href="homePageHref">
         <span class="brand-mark"></span>
         <span class="brand-copy">
           <strong>拼豆.cn</strong>
@@ -1116,167 +1153,184 @@ onBeforeUnmount(() => {
         </span>
       </a>
       <nav class="site-nav">
+        <a :href="communityPageHref">社区灵感</a>
         <a href="#studio">怎么开拼</a>
       </nav>
-      <button class="action-button action-button-primary header-cta" type="button" @click="triggerHeroUpload">
+      <button
+        class="action-button action-button-primary header-cta"
+        type="button"
+        @click="triggerHeroUpload"
+      >
         开始制作
       </button>
     </header>
 
-    <main id="top" class="site-main">
-      <section id="studio" class="studio-panel studio-panel-prime">
-        <div class="studio-welcome">
-          <div class="studio-welcome-copy">
-            <div class="welcome-heading">
-              <h1>
-                <em class="hero-line hero-line-focus">照片变拼豆</em>
-                <em class="hero-line hero-line-focus">马上出图纸</em>
-              </h1>
-              <p class="studio-lead">
-                一键预览成品、色号和颗数，下载就能开拼。
-              </p>
+    <main id="top" class="site-main" :class="{ 'site-main-community': isCommunityPage }">
+      <template v-if="isCommunityPage">
+        <CommunityShowcase @launch-seed="handleLaunchCommunitySeed" />
+      </template>
+
+      <template v-else>
+        <section id="studio" class="studio-panel studio-panel-prime">
+          <div class="studio-welcome">
+            <div class="studio-welcome-copy">
+              <div class="welcome-heading">
+                <h1>
+                  <em class="hero-line hero-line-focus">照片变拼豆</em>
+                  <em class="hero-line hero-line-focus">马上出图纸</em>
+                </h1>
+                <p class="studio-lead">
+                  一键预览成品、色号和颗数，下载就能开拼。
+                </p>
+              </div>
+
+              <div class="hero-side-stack">
+                <a class="hero-community-entry" :href="communityPageHref">
+                  <div class="hero-community-entry-copy">
+                    <span class="quickstart-kicker hero-community-kicker">社区灵感页</span>
+                    <strong>先看看大家最近都在做什么</strong>
+                    <div class="hero-community-entry-meta" aria-label="社区题材">
+                      <span
+                        v-for="tag in heroCommunityTags"
+                        :key="tag"
+                        class="hero-community-tag"
+                      >
+                        {{ tag }}
+                      </span>
+                    </div>
+                  </div>
+                  <span class="hero-community-entry-cta">去社区页</span>
+                </a>
+
+                <div class="hero-launcher hero-launcher-primary">
+                  <div class="hero-launcher-copy">
+                    <span class="quickstart-kicker">{{ heroGuide.badge }}</span>
+                    <p>{{ heroGuide.text }}</p>
+                  </div>
+                  <div class="hero-actions">
+                    <button class="action-button action-button-primary" type="button" @click="triggerHeroUpload">
+                      上传照片生成图纸
+                    </button>
+                  </div>
+                  <small class="hero-action-note">先看效果，再决定尺寸、颜色和品牌。</small>
+                </div>
+              </div>
             </div>
 
-            <div class="hero-launcher">
-              <span class="quickstart-kicker">{{ heroGuide.badge }}</span>
-              <strong>{{ heroGuide.title }}</strong>
-              <p>{{ heroGuide.text }}</p>
-              <div class="hero-actions">
-                <button class="action-button action-button-primary" type="button" @click="triggerHeroUpload">
-                  上传照片生成图纸
-                </button>
+            <div
+              class="studio-welcome-side conversion-demo"
+              :class="[`is-step-${activeDemoStep}`, { 'is-paused': demoPaused }]"
+              @mouseleave="resumeDemo"
+            >
+              <div class="demo-topbar">
+                <span>实时演示</span>
+                <strong>照片到图纸，一气呵成</strong>
               </div>
-              <small class="hero-action-note">先看效果，再决定尺寸、颜色和品牌。</small>
 
-              <div class="hero-product-row">
+              <div class="demo-stage" aria-label="照片转拼豆图纸的演示">
                 <article
-                  v-for="step in onboardingSteps"
-                  :key="step.id"
-                  class="hero-product-step"
-                  :class="`is-${step.state}`"
+                  class="demo-panel demo-panel-source"
+                  :class="{ 'is-active': activeDemoStep === 'source' }"
+                  @mouseenter="pauseDemo('source')"
+                  @focusin="pauseDemo('source')"
                 >
-                  <span>{{ step.id }}</span>
-                  <strong>{{ step.title }}</strong>
-                  <small>{{ step.detail }}</small>
+                  <div class="canvas-caption">
+                    <span>01 选照片</span>
+                    <strong>{{ heroDemoLabel }}</strong>
+                  </div>
+                  <canvas ref="heroSourceCanvas" class="canvas-surface"></canvas>
+                </article>
+
+                <article
+                  class="demo-panel demo-panel-result"
+                  :class="{ 'is-active': activeDemoStep === 'result' }"
+                  @mouseenter="pauseDemo('result')"
+                  @focusin="pauseDemo('result')"
+                >
+                  <div class="canvas-caption">
+                    <span>02 看成品</span>
+                    <strong>{{ heroDemoResult.width }} × {{ heroDemoResult.height }}</strong>
+                  </div>
+                  <canvas ref="heroResultCanvas" class="canvas-surface"></canvas>
+                </article>
+
+                <article
+                  class="demo-panel demo-panel-sheet"
+                  :class="{ 'is-active': activeDemoStep === 'sheet' }"
+                  @mouseenter="pauseDemo('sheet')"
+                  @focusin="pauseDemo('sheet')"
+                >
+                  <div class="canvas-caption">
+                    <span>03 拿图纸</span>
+                    <strong>{{ heroDemoResult.counts.length }} 色 · {{ heroDemoTotalBeads.toLocaleString("zh-CN") }} 颗</strong>
+                  </div>
+                  <canvas ref="heroPatternCanvas" class="canvas-mini-sheet"></canvas>
+                  <div class="demo-sheet-codes" aria-label="示例图纸色号">
+                    <span
+                      v-for="item in heroDemoResult.counts.slice(0, 4)"
+                      :key="item.code"
+                      :title="`${item.code} ${item.name} · ${item.count} 颗`"
+                    >
+                      <i :style="{ background: item.hex }" aria-hidden="true"></i>
+                      {{ item.code }}
+                      <b>{{ item.count }}</b>
+                    </span>
+                  </div>
                 </article>
               </div>
-            </div>
-          </div>
 
-          <div
-            class="studio-welcome-side conversion-demo"
-            :class="[`is-step-${activeDemoStep}`, { 'is-paused': demoPaused }]"
-            @mouseleave="resumeDemo"
-          >
-            <div class="demo-topbar">
-              <span>实时演示</span>
-              <strong>照片到图纸，一气呵成</strong>
-            </div>
+              <div class="demo-flowbar">
+                <div class="demo-flow-progress"></div>
+                <button
+                  class="demo-flow-step"
+                  :class="{ 'is-active': activeDemoStep === 'source' }"
+                  type="button"
+                  @click="pauseDemo('source')"
+                  @mouseenter="pauseDemo('source')"
+                  @focus="pauseDemo('source')"
+                >
+                  选照片
+                </button>
+                <button
+                  class="demo-flow-step"
+                  :class="{ 'is-active': activeDemoStep === 'result' }"
+                  type="button"
+                  @click="pauseDemo('result')"
+                  @mouseenter="pauseDemo('result')"
+                  @focus="pauseDemo('result')"
+                >
+                  看效果
+                </button>
+                <button
+                  class="demo-flow-step"
+                  :class="{ 'is-active': activeDemoStep === 'sheet' }"
+                  type="button"
+                  @click="pauseDemo('sheet')"
+                  @mouseenter="pauseDemo('sheet')"
+                  @focus="pauseDemo('sheet')"
+                >
+                  拿图纸
+                </button>
+              </div>
 
-            <div class="demo-stage" aria-label="照片转拼豆图纸的演示">
-              <article
-                class="demo-panel demo-panel-source"
-                :class="{ 'is-active': activeDemoStep === 'source' }"
-                @mouseenter="pauseDemo('source')"
-                @focusin="pauseDemo('source')"
-              >
-                <div class="canvas-caption">
-                  <span>01 选照片</span>
-                  <strong>{{ heroDemoLabel }}</strong>
-                </div>
-                <canvas ref="heroSourceCanvas" class="canvas-surface"></canvas>
-              </article>
-
-              <article
-                class="demo-panel demo-panel-result"
-                :class="{ 'is-active': activeDemoStep === 'result' }"
-                @mouseenter="pauseDemo('result')"
-                @focusin="pauseDemo('result')"
-              >
-                <div class="canvas-caption">
-                  <span>02 看成品</span>
+              <div class="demo-output-row">
+                <div>
+                  <span>图纸尺寸</span>
                   <strong>{{ heroDemoResult.width }} × {{ heroDemoResult.height }}</strong>
                 </div>
-                <canvas ref="heroResultCanvas" class="canvas-surface"></canvas>
-              </article>
-
-              <article
-                class="demo-panel demo-panel-sheet"
-                :class="{ 'is-active': activeDemoStep === 'sheet' }"
-                @mouseenter="pauseDemo('sheet')"
-                @focusin="pauseDemo('sheet')"
-              >
-                <div class="canvas-caption">
-                  <span>03 拿图纸</span>
-                  <strong>{{ heroDemoResult.counts.length }} 色 · {{ heroDemoTotalBeads.toLocaleString("zh-CN") }} 颗</strong>
+                <div>
+                  <span>色号数量</span>
+                  <strong>{{ heroDemoResult.counts.length }} 色</strong>
                 </div>
-                <canvas ref="heroPatternCanvas" class="canvas-mini-sheet"></canvas>
-                <div class="demo-sheet-codes" aria-label="示例图纸色号">
-                  <span
-                    v-for="item in heroDemoResult.counts.slice(0, 4)"
-                    :key="item.code"
-                    :title="`${item.code} ${item.name} · ${item.count} 颗`"
-                  >
-                    <i :style="{ background: item.hex }" aria-hidden="true"></i>
-                    {{ item.code }}
-                    <b>{{ item.count }}</b>
-                  </span>
+                <div>
+                  <span>预计颗数</span>
+                  <strong>{{ heroDemoTotalBeads.toLocaleString("zh-CN") }} 颗</strong>
                 </div>
-              </article>
-            </div>
-
-            <div class="demo-flowbar">
-              <div class="demo-flow-progress"></div>
-              <button
-                class="demo-flow-step"
-                :class="{ 'is-active': activeDemoStep === 'source' }"
-                type="button"
-                @click="pauseDemo('source')"
-                @mouseenter="pauseDemo('source')"
-                @focus="pauseDemo('source')"
-              >
-                选照片
-              </button>
-              <button
-                class="demo-flow-step"
-                :class="{ 'is-active': activeDemoStep === 'result' }"
-                type="button"
-                @click="pauseDemo('result')"
-                @mouseenter="pauseDemo('result')"
-                @focus="pauseDemo('result')"
-              >
-                看效果
-              </button>
-              <button
-                class="demo-flow-step"
-                :class="{ 'is-active': activeDemoStep === 'sheet' }"
-                type="button"
-                @click="pauseDemo('sheet')"
-                @mouseenter="pauseDemo('sheet')"
-                @focus="pauseDemo('sheet')"
-              >
-                拿图纸
-              </button>
-            </div>
-
-            <div class="demo-output-row">
-              <div>
-                <span>图纸尺寸</span>
-                <strong>{{ heroDemoResult.width }} × {{ heroDemoResult.height }}</strong>
-              </div>
-              <div>
-                <span>色号数量</span>
-                <strong>{{ heroDemoResult.counts.length }} 色</strong>
-              </div>
-              <div>
-                <span>预计颗数</span>
-                <strong>{{ heroDemoTotalBeads.toLocaleString("zh-CN") }} 颗</strong>
               </div>
             </div>
           </div>
-        </div>
-
-      </section>
+        </section>
+      </template>
     </main>
 
     <GenerationDialog
