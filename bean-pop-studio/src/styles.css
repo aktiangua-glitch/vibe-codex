@@ -260,6 +260,39 @@ canvas {
   gap: 20px;
 }
 
+.site-footer {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 0;
+}
+
+.site-footer-record {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid rgba(29, 24, 19, 0.07);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.6);
+  color: rgba(23, 26, 31, 0.68);
+  font-size: 0.86rem;
+  transition:
+    color 180ms var(--ease),
+    border-color 180ms var(--ease),
+    background 180ms var(--ease),
+    transform 180ms var(--ease);
+}
+
+.site-footer-record:hover,
+.site-footer-record:focus-visible {
+  color: var(--ink);
+  border-color: rgba(0, 167, 126, 0.18);
+  background: rgba(255, 255, 255, 0.82);
+  outline: none;
+  transform: translateY(-1px);
+}
+
 #studio,
 #community,
 #community-gallery {
@@ -5499,6 +5532,10 @@ canvas {
     padding-top: 18px;
   }
 
+  .site-footer {
+    padding-top: 4px;
+  }
+
   .community-head,
   .community-gallery-head,
   .community-footer-cta {
@@ -5808,6 +5845,11 @@ canvas {
 
   .site-main-community {
     padding-top: 54px;
+  }
+
+  .site-footer-record {
+    width: 100%;
+    text-align: center;
   }
 
   .hero-product-row,
