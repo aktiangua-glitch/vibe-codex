@@ -6,7 +6,6 @@ import { communityCategories } from "./data/communitySeeds.js";
 import { brandMeta, getBrandOutputColorLimit } from "./data/palettes.js";
 import {
   createExportCanvas,
-  createSampleDataUrl,
   createSavedPreview,
   getScaledGridSize,
   processImage,
@@ -110,6 +109,28 @@ let toastCounter = 0;
 const demoSteps = ["source", "result", "sheet"];
 const flowSteps = ["upload", "tune", "result"];
 const heroDemoLabel = "红帽小勇者";
+const heroDemoProject = Object.freeze({
+  brand: "MARD",
+  cropRatio: "portrait",
+  framing: "balanced",
+  label: heroDemoLabel,
+  maxColors: 14,
+  offsetX: 0,
+  offsetY: -0.02,
+  styleIntensity: 0.92,
+  styleMode: "clean_ink",
+  subjectBox: {
+    hasTransparentBackground: true,
+    x: 0.16,
+    y: 0.08,
+    width: 0.68,
+    height: 0.74,
+    confidence: 0.9,
+  },
+  targetWidth: 40,
+  transparentBackground: true,
+  zoomAdjust: 1,
+});
 const currentPath = typeof window !== "undefined" ? window.location.pathname : "/";
 const isCommunityPage = /^\/community(?:\/|$)/.test(currentPath);
 const homePageHref = isCommunityPage ? "../" : "#top";
@@ -630,6 +651,20 @@ function createMarketingDemoDataUrl() {
   return canvas.toDataURL("image/png");
 }
 
+function applyHeroDemoProjectConfig() {
+  config.projectName = heroDemoProject.label;
+  config.targetWidth = heroDemoProject.targetWidth;
+  config.maxColors = heroDemoProject.maxColors;
+  config.brand = heroDemoProject.brand;
+  prep.cropRatio = heroDemoProject.cropRatio;
+  prep.framing = heroDemoProject.framing;
+  prep.styleMode = heroDemoProject.styleMode;
+  prep.styleIntensity = heroDemoProject.styleIntensity;
+  prep.zoomAdjust = heroDemoProject.zoomAdjust;
+  prep.offsetX = heroDemoProject.offsetX;
+  prep.offsetY = heroDemoProject.offsetY;
+}
+
 async function loadImageFromDataUrl(dataUrl, label, {
   autoRecommendSize = true,
   preserveCurrentProject = false,
@@ -659,43 +694,35 @@ async function loadImageFromDataUrl(dataUrl, label, {
 }
 
 async function bootSampleImage() {
-  config.projectName = "示例拼豆图纸";
-  config.targetWidth = 32;
-  config.maxColors = 12;
-  config.brand = "MARD";
-  prep.cropRatio = "auto";
-  prep.framing = "balanced";
-  prep.styleMode = "clean_ink";
-  prep.zoomAdjust = 1;
-  prep.offsetX = 0;
-  prep.offsetY = 0;
-  await loadImageFromDataUrl(createSampleDataUrl(), "示例照片", { autoRecommendSize: false });
+  applyHeroDemoProjectConfig();
+  await loadImageFromDataUrl(
+    createMarketingDemoDataUrl(),
+    `${heroDemoProject.label}.png`,
+    {
+      autoRecommendSize: false,
+      subjectOverride: heroDemoProject.subjectBox,
+    }
+  );
 }
 
 async function bootMarketingDemo() {
   const demoImage = await createImageFromDataUrl(createMarketingDemoDataUrl());
   const prepared = buildPreparedSource(demoImage, {
-    cropRatio: "portrait",
-    framing: "balanced",
-    offsetX: 0,
-    offsetY: -0.02,
-    styleIntensity: 0.92,
-    styleMode: "clean_ink",
-    subjectBox: {
-      x: 0.16,
-      y: 0.08,
-      width: 0.68,
-      height: 0.74,
-      confidence: 0.9,
-    },
-    zoomAdjust: 1,
+    cropRatio: heroDemoProject.cropRatio,
+    framing: heroDemoProject.framing,
+    offsetX: heroDemoProject.offsetX,
+    offsetY: heroDemoProject.offsetY,
+    styleIntensity: heroDemoProject.styleIntensity,
+    styleMode: heroDemoProject.styleMode,
+    subjectBox: heroDemoProject.subjectBox,
+    zoomAdjust: heroDemoProject.zoomAdjust,
   });
   const demo = processImage({
     source: prepared.canvas,
-    brand: "MARD",
-    maxColors: 14,
-    targetWidth: 40,
-    transparentBackground: true,
+    brand: heroDemoProject.brand,
+    maxColors: heroDemoProject.maxColors,
+    targetWidth: heroDemoProject.targetWidth,
+    transparentBackground: heroDemoProject.transparentBackground,
   });
 
   heroDemoSource.value = demoImage;
@@ -1332,6 +1359,17 @@ onBeforeUnmount(() => {
         </section>
       </template>
     </main>
+
+    <footer class="site-footer">
+      <a
+        class="site-footer-record"
+        href="https://beian.miit.gov.cn/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        闽ICP备2026016467号-1
+      </a>
+    </footer>
 
     <GenerationDialog
       ref="generationDialogRef"
