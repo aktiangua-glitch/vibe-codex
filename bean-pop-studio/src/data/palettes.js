@@ -90,7 +90,9 @@ function createBrand({
   };
 }
 
-const mard291Colors = [
+// Historical seed list kept to preserve family/name metadata.
+// The active MARD palette is derived from the current 221-color mainland retail mapping below.
+const mardLegacySeedColors = [
   createColor({ code: "A1", name: "Warm 01", hex: "#fdeaea", group: "A" }),
   createColor({ code: "A2", name: "Warm 02", hex: "#fefaef", group: "A" }),
   createColor({ code: "A3", name: "Warm 03", hex: "#f3e0cf", group: "A" }),
@@ -384,6 +386,252 @@ const mard291Colors = [
   createColor({ code: "ZG8", name: "Mist Neutral 08", hex: "#cab9c2", group: "ZG" }),
 ];
 
+const MARD_221_HEX_BY_CODE = Object.freeze(
+  Object.fromEntries(`
+A1 #faf4c8
+A2 #ffffd5
+A3 #feff8b
+A4 #fbed56
+A5 #f4d738
+A6 #feac4c
+A7 #fe8b4c
+A8 #ffda45
+A9 #ff995b
+A10 #f77c31
+A11 #ffdd99
+A12 #fe9f72
+A13 #ffc365
+A14 #fd543d
+A15 #fff365
+A16 #ffff9f
+A17 #ffe36e
+A18 #febe7d
+A19 #fd7c72
+A20 #ffd568
+A21 #ffe395
+A22 #f4f57d
+A23 #e6c9b7
+A24 #f7f8a2
+A25 #ffd67d
+A26 #ffc830
+B1 #e6ee31
+B2 #63f347
+B3 #9ef780
+B4 #5de035
+B5 #35e352
+B6 #65e2a6
+B7 #3daf80
+B8 #1c9c4f
+B9 #27523a
+B10 #95d3c2
+B11 #5d722a
+B12 #166f41
+B13 #caeb7b
+B14 #ade946
+B15 #2e5132
+B16 #c5ed9c
+B17 #9bb13a
+B18 #e6ee49
+B19 #24b88c
+B20 #c2f0cc
+B21 #156a6b
+B22 #0b3c43
+B23 #303a21
+B24 #eefca5
+B25 #4e846d
+B26 #8d7a35
+B27 #cce1af
+B28 #9ee5b9
+B29 #c5e254
+B30 #e2fcb1
+B31 #b0e792
+B32 #9cab5a
+C1 #e8ffe7
+C2 #a9f9fc
+C3 #a0e2fb
+C4 #41ccff
+C5 #01aceb
+C6 #50aaf0
+C7 #3677d2
+C8 #0f54c0
+C9 #324bca
+C10 #3ebce2
+C11 #28ddde
+C12 #1c334d
+C13 #cde8ff
+C14 #d5fdff
+C15 #22c4c6
+C16 #1557a8
+C17 #04d1f6
+C18 #1d3344
+C19 #1887a2
+C20 #176daf
+C21 #beddff
+C22 #67b4be
+C23 #c8e2ff
+C24 #7cc4ff
+C25 #a9e5e5
+C26 #3caed8
+C27 #d3dffa
+C28 #bbcfed
+C29 #34488e
+D1 #aeb4f2
+D2 #858edd
+D3 #2f54af
+D4 #182a84
+D5 #b843c5
+D6 #ac7bde
+D7 #8854b3
+D8 #e2d3ff
+D9 #d5b9f8
+D10 #361851
+D11 #b9bae1
+D12 #de9ad4
+D13 #b90095
+D14 #8b279b
+D15 #2f1f90
+D16 #e3e1ee
+D17 #c4d4f6
+D18 #a45ec7
+D19 #d8c3d7
+D20 #9c32b2
+D21 #9a009b
+D22 #333a95
+D23 #ebdafc
+D24 #7786e5
+D25 #494fc7
+D26 #dfc2f8
+E1 #fdd3cc
+E2 #fec0df
+E3 #ffb7e7
+E4 #e8649e
+E5 #f551a2
+E6 #f13d74
+E7 #c63478
+E8 #ffdbe9
+E9 #e970cc
+E10 #d33793
+E11 #fcddd2
+E12 #f78fc3
+E13 #b5006d
+E14 #ffd1ba
+E15 #f8c7c9
+E16 #fff3eb
+E17 #ffe2ea
+E18 #ffc7db
+E19 #febad5
+E20 #d8c7d1
+E21 #bd9da1
+E22 #b785a1
+E23 #937a8d
+E24 #e1bce8
+F1 #fd957b
+F2 #fc3d46
+F3 #f74941
+F4 #fc283c
+F5 #e7002f
+F6 #943630
+F7 #971937
+F8 #bc0028
+F9 #e2677a
+F10 #8a4526
+F11 #5a2121
+F12 #fd4e6a
+F13 #f35744
+F14 #ffa9ad
+F15 #d30022
+F16 #fec2a6
+F17 #e69c79
+F18 #d37c46
+F19 #c1444a
+F20 #cd9391
+F21 #f7b4c6
+F22 #fdc0d0
+F23 #f67e66
+F24 #e698aa
+F25 #e54b4f
+G1 #ffe2ce
+G2 #ffc4aa
+G3 #f4c3a5
+G4 #e1b383
+G5 #edb045
+G6 #e99c17
+G7 #9d5b3e
+G8 #753832
+G9 #e6b483
+G10 #d98c39
+G11 #e0c593
+G12 #ffc890
+G13 #b7714a
+G14 #8d614c
+G15 #fcf9e0
+G16 #f2d9ba
+G17 #78524b
+G18 #ffe4cc
+G19 #e07935
+G20 #a94023
+G21 #b88558
+H1 #fdfbff
+H2 #feffff
+H3 #b6b1ba
+H4 #89858c
+H5 #48464e
+H6 #2f2b2f
+H7 #000000
+H8 #e7d6db
+H9 #ededed
+H10 #eee9ea
+H11 #cecdd5
+H12 #fff5ed
+H13 #f5ecd2
+H14 #cfd7d3
+H15 #98a6a8
+H16 #1d1414
+H17 #f1eded
+H18 #fffdf0
+H19 #f6efe2
+H20 #949fa3
+H21 #fffbe1
+H22 #cacad4
+H23 #9a9d94
+M1 #bcc6b8
+M2 #8aa386
+M3 #697d80
+M4 #e3d2bc
+M5 #d0ccaa
+M6 #b0a782
+M7 #b4a497
+M8 #b38281
+M9 #a58767
+M10 #c5b2bc
+M11 #9f7594
+M12 #644749
+M13 #d19066
+M14 #c77362
+M15 #757d78
+`.trim().split("\n").map((line) => {
+    const [code, hex] = line.trim().split(/\s+/);
+    return [code, hex];
+  }))
+);
+
+const mard221Colors = mardLegacySeedColors
+  .filter((color) => Object.prototype.hasOwnProperty.call(MARD_221_HEX_BY_CODE, color.code))
+  .map((color) => createColor({
+    code: color.code,
+    name: color.name,
+    hex: MARD_221_HEX_BY_CODE[color.code],
+    group: color.group,
+    aliases: color.aliases,
+    available: color.available,
+    autoMatch: color.autoMatch,
+    finish: color.finish,
+  }));
+
+if (mard221Colors.length !== Object.keys(MARD_221_HEX_BY_CODE).length) {
+  throw new Error("MARD 221 palette seed mismatch");
+}
+
 const perlerStarterColors = [
   createColor({ code: "P01", name: "White", hex: "#f8f6f2", group: "H" }),
   createColor({ code: "P02", name: "Cream", hex: "#efe2cc", group: "A" }),
@@ -441,17 +689,17 @@ const hamaStarterColors = [
 export const brandCatalog = {
   MARD: createBrand({
     id: "MARD",
-    label: "MARD 291",
+    label: "MARD 221",
     shortLabel: "MARD",
     note: "大陆主流常用方案",
     badge: "CN Mainstream",
-    paletteEdition: "291 色参考映射",
+    paletteEdition: "221 色零售标准色卡",
     coverage: "full",
     marketFocus: "CN Mainland",
-    maxOutputColors: 48,
-    defaultMaxColors: 18,
-    recommendedColorCounts: [12, 18, 24, 32, 40, 48],
-    colors: mard291Colors,
+    maxOutputColors: 221,
+    defaultMaxColors: 221,
+    recommendedColorCounts: [12, 18, 24, 32, 40, 48, 64, 96, 128, 160, 192, 221],
+    colors: mard221Colors,
   }),
   Perler: createBrand({
     id: "Perler",
