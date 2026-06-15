@@ -1291,7 +1291,9 @@ onBeforeUnmount(() => {
                     <span>03 拿图纸</span>
                     <strong>{{ heroDemoResult.counts.length }} 色 · {{ heroDemoTotalBeads.toLocaleString("zh-CN") }} 颗</strong>
                   </div>
-                  <canvas ref="heroPatternCanvas" class="canvas-mini-sheet"></canvas>
+                  <div class="demo-sheet-preview">
+                    <canvas ref="heroPatternCanvas" class="canvas-mini-sheet"></canvas>
+                  </div>
                   <div class="demo-sheet-codes" aria-label="示例图纸色号">
                     <span
                       v-for="item in heroDemoResult.counts.slice(0, 4)"
