@@ -54,8 +54,11 @@ src/
     ResultSidebar.vue             # 结果侧栏组件
     SavedShelf.vue                # 本地作品夹
   data/
-    palettes.js                   # 拼豆品牌色盘
+    palettes.json                 # 拼豆品牌色盘配置
+    palettes.js                   # 读取色盘配置并导出运行时数据
     presets.js                    # 示例/预设数据
+  public/
+    palettes.json                 # dev/build/test 时自动同步的浏览器访问版
   lib/
     beadEngine.js                 # 核心拼豆算法、Canvas 渲染、导出
     imagePrep.js                  # 图片取景、主体识别、风格处理
@@ -146,4 +149,3 @@ src/
 - 增加移动端逐板模式：一块板一块板查看，已完成豆点可标记。
 - 增加更强的主体提取：接入前景分割或用户手动画框。
 - 增加导入/导出项目 JSON，支持二次编辑和分享。
-

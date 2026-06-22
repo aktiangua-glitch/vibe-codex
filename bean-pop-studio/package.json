@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "sync:palettes": "node ./scripts/sync-public-palettes.mjs",
+    "predev": "npm run sync:palettes",
+    "prebuild": "npm run sync:palettes",
+    "pretest": "npm run sync:palettes",
     "build:palette-compare": "node ./scripts/build-palette-compare-html.mjs",
     "dev": "vite",
     "build": "vite build",
