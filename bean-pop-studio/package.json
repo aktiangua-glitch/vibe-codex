@@ -9,8 +9,10 @@
     "prebuild": "npm run sync:palettes",
     "pretest": "npm run sync:palettes",
     "build:palette-compare": "node ./scripts/build-palette-compare-html.mjs",
-    "dev": "vite",
-    "build": "vite build",
+    "build:app": "vite build",
+    "build:skill": "vite build --config vite.skill.config.js",
+    "dev": "npm run build:skill && vite",
+    "build": "npm run build:skill && npm run build:app",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "test": "vitest run"
   },

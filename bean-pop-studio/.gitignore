@@ -1,6 +1,7 @@
 node_modules/
 dist/
 public/palettes.json
+public/skill/
 .DS_Store
 
 *.log
