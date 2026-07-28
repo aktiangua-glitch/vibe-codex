@@ -1,0 +1,33 @@
+# PlatformIO and local toolchains
+.pio/
+.pioenvs/
+.piolibdeps/
+.platformio-core/
+.venv/
+
+# Editors and generated indexes
+.vscode/
+.idea/
+compile_commands.json
+*.swp
+
+# Local firmware, recordings, logs, and temporary output
+backups/
+recordings/
+REC_*.WAV
+*.bin
+*.elf
+*.map
+*.log
+*.tmp
+*.bak
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Operating-system metadata
+.DS_Store
+**/.DS_Store
+._*
+Thumbs.db
