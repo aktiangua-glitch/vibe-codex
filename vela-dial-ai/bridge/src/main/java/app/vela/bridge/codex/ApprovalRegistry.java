@@ -97,6 +97,7 @@ public class ApprovalRegistry {
     public record ResolutionAttempt(
             PendingApproval approval,
             String decision,
+            String wireDecision,
             ResolutionState state) {
 
         boolean isNew() {
@@ -214,7 +215,11 @@ public class ApprovalRegistry {
                 throw new BridgeApiException(HttpStatus.CONFLICT, "approval_already_resolved",
                         "Approval was already resolved with a different decision");
             }
-            return new ResolutionAttempt(null, decision, ResolutionState.CONFIRMED);
+            return new ResolutionAttempt(
+                    null,
+                    decision,
+                    decision,
+                    ResolutionState.CONFIRMED);
         }
 
         String sentDecision = sentDecisions.get(deviceId);
@@ -223,7 +228,12 @@ public class ApprovalRegistry {
                 throw new BridgeApiException(HttpStatus.CONFLICT, "approval_already_resolved",
                         "Approval response was already sent with a different decision");
             }
-            return new ResolutionAttempt(sent.get(deviceId), decision, ResolutionState.SENT);
+            PendingApproval sentApproval = sent.get(deviceId);
+            return new ResolutionAttempt(
+                    sentApproval,
+                    decision,
+                    wireDecision(sentApproval, decision),
+                    ResolutionState.SENT);
         }
         if (inFlight.containsKey(deviceId)) {
             throw new BridgeApiException(HttpStatus.CONFLICT, "approval_resolution_in_progress",
@@ -235,10 +245,7 @@ public class ApprovalRegistry {
             throw new BridgeApiException(HttpStatus.NOT_FOUND, "approval_not_found",
                     "Approval is missing, expired, or was resolved elsewhere");
         }
-        if (!approval.availableDecisions().contains(decision)) {
-            throw new BridgeApiException(HttpStatus.CONFLICT, "approval_decision_unavailable",
-                    "Codex did not offer decision " + decision + " for this request");
-        }
+        String wireDecision = wireDecision(approval, decision);
         if (requireBinding
                 && (!MessageDigest.isEqual(
                         approval.nonce().getBytes(StandardCharsets.UTF_8),
@@ -252,7 +259,11 @@ public class ApprovalRegistry {
                     "Approval nonce or actionDigest no longer matches the queued action");
         }
         inFlight.put(deviceId, decision);
-        return new ResolutionAttempt(approval, decision, ResolutionState.NEW);
+        return new ResolutionAttempt(
+                approval,
+                decision,
+                wireDecision,
+                ResolutionState.NEW);
     }
 
     public synchronized void markSent(ResolutionAttempt attempt) {
@@ -372,6 +383,37 @@ public class ApprovalRegistry {
                     "Decision must be accept or decline");
         }
         return normalized;
+    }
+
+    private static String wireDecision(
+            PendingApproval approval,
+            String semanticDecision) {
+        if (approval == null) {
+            return semanticDecision;
+        }
+        List<String> available = approval.availableDecisions();
+        if ("accept".equals(semanticDecision)) {
+            // A one-shot device approval must never silently become a
+            // session-wide grant.
+            if (available.contains("accept")) {
+                return "accept";
+            }
+        } else if ("decline".equals(semanticDecision)) {
+            if (available.contains("decline")) {
+                return "decline";
+            }
+            // Some Codex approval requests expose cancel rather than decline.
+            // Both safely deny the pending action, while the device-facing
+            // semantic remains "decline" for idempotency and feedback.
+            if (available.contains("cancel")) {
+                return "cancel";
+            }
+        }
+        throw new BridgeApiException(
+                HttpStatus.CONFLICT,
+                "approval_decision_unavailable",
+                "Codex did not offer a safe wire decision for "
+                        + semanticDecision);
     }
 
     private static String requiredText(JsonNode node, String field) {

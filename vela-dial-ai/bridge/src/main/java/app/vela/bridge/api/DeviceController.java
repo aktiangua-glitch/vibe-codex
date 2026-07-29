@@ -47,12 +47,17 @@ public class DeviceController {
     }
 
     public record DeviceQuota(
+            List<QuotaView> windows,
+            TokenUsageView tokens,
             @JsonProperty("five_hour") QuotaView fiveHour,
             @JsonProperty("seven_day") QuotaView sevenDay) {
     }
 
     public record QuotaView(
             boolean valid,
+            String key,
+            String label,
+            @JsonProperty("window_minutes") Long windowMinutes,
             @JsonProperty("used_percent") Integer usedPercent,
             @JsonProperty("remaining_percent") Integer remainingPercent,
             @JsonProperty("reset_label") String resetLabel) {
@@ -60,9 +65,31 @@ public class DeviceController {
         static QuotaView from(CodexStateStore.QuotaWindow value) {
             return new QuotaView(
                     value.valid(),
+                    value.key(),
+                    value.label(),
+                    value.windowMinutes(),
                     value.usedPercent(),
                     value.remainingPercent(),
                     value.resetLabel());
+        }
+    }
+
+    public record TokenUsageView(
+            boolean valid,
+            @JsonProperty("lifetime_tokens") Long lifetimeTokens,
+            @JsonProperty("latest_day_tokens") Long latestDayTokens,
+            @JsonProperty("latest_day_label") String latestDayLabel,
+            @JsonProperty("peak_daily_tokens") Long peakDailyTokens,
+            @JsonProperty("current_streak_days") Integer currentStreakDays) {
+
+        static TokenUsageView from(CodexStateStore.AccountTokenUsage value) {
+            return new TokenUsageView(
+                    value.valid(),
+                    value.lifetimeTokens(),
+                    value.latestDayTokens(),
+                    value.latestDayLabel(),
+                    value.peakDailyTokens(),
+                    value.currentStreakDays());
         }
     }
 
@@ -71,6 +98,10 @@ public class DeviceController {
             String title,
             String summary,
             String state,
+            @JsonProperty("total_tokens") Long totalTokens,
+            @JsonProperty("last_tokens") Long lastTokens,
+            @JsonProperty("context_window_tokens") Long contextWindowTokens,
+            @JsonProperty("context_used_percent") Integer contextUsedPercent,
             @JsonProperty("needs_feedback") boolean needsFeedback,
             SessionApproval approval) {
     }
@@ -206,8 +237,14 @@ public class DeviceController {
                 state.revision(),
                 Instant.now(),
                 new DeviceQuota(
-                        QuotaView.from(state.quota5h()),
-                        QuotaView.from(state.quota7d())),
+                        state.quotaWindows().stream().map(QuotaView::from).toList(),
+                        TokenUsageView.from(state.tokenUsage()),
+                        QuotaView.from(CodexStateStore.findWindow(
+                                state.quotaWindows(),
+                                300)),
+                        QuotaView.from(CodexStateStore.findWindow(
+                                state.quotaWindows(),
+                                10_080))),
                 state.totalSessionCount(),
                 sessions,
                 currentApproval,
@@ -325,6 +362,10 @@ public class DeviceController {
                 firstNonBlank(session.name(), session.preview(), "Codex 会话"),
                 firstNonBlank(session.lastMessage(), session.preview(), ""),
                 deviceState(session),
+                session.totalTokens(),
+                session.lastTokens(),
+                session.contextWindowTokens(),
+                session.contextUsedPercent(),
                 session.needsFeedback(),
                 sessionApproval);
     }

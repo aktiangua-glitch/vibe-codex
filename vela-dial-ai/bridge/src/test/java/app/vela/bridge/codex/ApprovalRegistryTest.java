@@ -67,11 +67,58 @@ class ApprovalRegistryTest {
         ApprovalRegistry.ResolutionAttempt allow = registry.beginResolution(
                 approval.id(), "allow", approval.nonce(), approval.actionDigest(), true);
         assertThat(allow.decision()).isEqualTo("accept");
+        assertThat(allow.wireDecision()).isEqualTo("accept");
         registry.rollbackResolution(allow);
 
         ApprovalRegistry.ResolutionAttempt reject = registry.beginResolution(
                 approval.id(), "reject", approval.nonce(), approval.actionDigest(), true);
         assertThat(reject.decision()).isEqualTo("decline");
+        assertThat(reject.wireDecision()).isEqualTo("decline");
+    }
+
+    @Test
+    void deviceRejectSafelyMapsToCancelWhenDeclineIsUnavailable() {
+        ApprovalRegistry registry = registry();
+        ObjectNode params = commandParams(
+                "thread-c", "turn-c", "item-c", "pa-c");
+        params.putArray("availableDecisions")
+                .add("acceptForSession")
+                .add("cancel");
+        ApprovalRegistry.ApprovalSnapshot approval = registry.capture(
+                "item/commandExecution/requestApproval",
+                jsonMapper.getNodeFactory().textNode("rpc-cancel"),
+                params);
+
+        ApprovalRegistry.ResolutionAttempt reject = registry.beginResolution(
+                approval.id(), "reject", approval.nonce(), approval.actionDigest(), true);
+
+        assertThat(reject.decision()).isEqualTo("decline");
+        assertThat(reject.wireDecision()).isEqualTo("cancel");
+        registry.markSent(reject);
+
+        ApprovalRegistry.ResolutionAttempt replay = registry.beginResolution(
+                approval.id(), "decline", approval.nonce(), approval.actionDigest(), true);
+        assertThat(replay.state()).isEqualTo(ApprovalRegistry.ResolutionState.SENT);
+        assertThat(replay.decision()).isEqualTo("decline");
+        assertThat(replay.wireDecision()).isEqualTo("cancel");
+    }
+
+    @Test
+    void deviceAllowNeverEscalatesToAcceptForSession() {
+        ApprovalRegistry registry = registry();
+        ObjectNode params = commandParams(
+                "thread-c", "turn-c", "item-c", "pa-c");
+        params.putArray("availableDecisions")
+                .add("acceptForSession")
+                .add("cancel");
+        ApprovalRegistry.ApprovalSnapshot approval = registry.capture(
+                "item/commandExecution/requestApproval",
+                jsonMapper.getNodeFactory().textNode("rpc-session-only"),
+                params);
+
+        assertThatThrownBy(() -> registry.beginResolution(
+                approval.id(), "allow", approval.nonce(), approval.actionDigest(), true))
+                .hasMessageContaining("safe wire decision");
     }
 
     private ApprovalRegistry registry() {

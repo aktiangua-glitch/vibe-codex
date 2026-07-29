@@ -59,13 +59,30 @@ class DeviceContractTest {
                 "turn-1",
                 "commandExecution",
                 "rm a.tmp",
+                500_000L,
+                100_000L,
+                200_000L,
+                40,
                 now.getEpochSecond(),
                 true,
                 false);
         CodexStateStore.StateSnapshot state = new CodexStateStore.StateSnapshot(
                 9,
-                new CodexStateStore.QuotaWindow(false, null, null, null),
-                new CodexStateStore.QuotaWindow(true, 57, 43, "2天后"),
+                List.of(new CodexStateStore.QuotaWindow(
+                        true,
+                        "primary",
+                        "7D",
+                        10_080L,
+                        57,
+                        43,
+                        "2天后")),
+                new CodexStateStore.AccountTokenUsage(
+                        true,
+                        987_654_321L,
+                        333_333L,
+                        "2026-07-30",
+                        7_654_321L,
+                        23),
                 20,
                 List.of(session));
         when(codex.status()).thenReturn(new CodexAppServerClient.StatusSnapshot(
@@ -84,10 +101,33 @@ class DeviceContractTest {
         JsonNode json = jsonMapper.readTree(jsonMapper.writeValueAsString(controller.snapshot()));
 
         assertThat(json.path("revision").asLong()).isEqualTo(9);
+        assertThat(json.path("quota").path("windows")).hasSize(1);
+        assertThat(json.path("quota").path("windows").get(0).path("key").asText())
+                .isEqualTo("primary");
+        assertThat(json.path("quota").path("windows").get(0).path("label").asText())
+                .isEqualTo("7D");
+        assertThat(json.path("quota").path("windows").get(0).path("window_minutes").asLong())
+                .isEqualTo(10_080);
         assertThat(json.path("quota").path("five_hour").path("valid").asBoolean()).isFalse();
         assertThat(json.path("quota").path("seven_day").path("used_percent").asInt()).isEqualTo(57);
+        assertThat(json.path("quota").path("tokens").path("lifetime_tokens").asLong())
+                .isEqualTo(987_654_321L);
+        assertThat(json.path("quota").path("tokens").path("latest_day_tokens").asLong())
+                .isEqualTo(333_333L);
+        assertThat(json.path("quota").path("tokens").path("latest_day_label").asText())
+                .isEqualTo("2026-07-30");
+        assertThat(json.path("quota").path("tokens").path("current_streak_days").asInt())
+                .isEqualTo(23);
         assertThat(json.path("total_session_count").asInt()).isEqualTo(20);
         assertThat(json.path("sessions").get(0).path("thread_id").asText()).isEqualTo("thread-20");
+        assertThat(json.path("sessions").get(0).path("total_tokens").asLong())
+                .isEqualTo(500_000);
+        assertThat(json.path("sessions").get(0).path("last_tokens").asLong())
+                .isEqualTo(100_000);
+        assertThat(json.path("sessions").get(0).path("context_window_tokens").asLong())
+                .isEqualTo(200_000);
+        assertThat(json.path("sessions").get(0).path("context_used_percent").asInt())
+                .isEqualTo(40);
         assertThat(json.path("sessions").get(0).path("state").asText())
                 .isEqualTo("waiting_approval");
         assertThat(json.path("current_approval").path("approval_id").asText())

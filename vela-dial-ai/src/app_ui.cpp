@@ -28,7 +28,7 @@ constexpr uint32_t kVoiceMaxMs = 30000;
 constexpr uint32_t kRecordingStartTimeoutMs = 3000;
 constexpr uint32_t kRecordingBusyTimeoutMs = 5000;
 constexpr uint32_t kAudioStaleMs = 1800;
-constexpr uint32_t kVoiceFinalizeMaxMs = 2500;
+constexpr uint32_t kVoiceFinalizeMaxMs = 8000;
 constexpr uint32_t kResultMs = 1250;
 constexpr uint32_t kUiRefreshMs = 80;
 constexpr float kSpeechThresholdDb = -38.0f;
@@ -41,12 +41,12 @@ const lv_color_t kPanelRaised = lv_color_hex(0x172536);
 const lv_color_t kBorder = lv_color_hex(0x26394D);
 const lv_color_t kText = lv_color_hex(0xF4F8FC);
 const lv_color_t kMuted = lv_color_hex(0x879CAF);
-const lv_color_t kCyan = lv_color_hex(0x42DED7);
+const lv_color_t kCyan = lv_color_hex(0x56E3EE);
 const lv_color_t kBlue = lv_color_hex(0x54A7FF);
-const lv_color_t kGreen = lv_color_hex(0x56DFA5);
-const lv_color_t kAmber = lv_color_hex(0xFFBE5C);
-const lv_color_t kRed = lv_color_hex(0xFF6F7D);
-const lv_color_t kPurple = lv_color_hex(0x9A83FF);
+const lv_color_t kGreen = lv_color_hex(0x48D17D);
+const lv_color_t kAmber = lv_color_hex(0xFFB647);
+const lv_color_t kRed = lv_color_hex(0xFF625F);
+const lv_color_t kPurple = lv_color_hex(0x8276FF);
 
 const lv_font_t *const kCjk = &lv_font_montserrat_16;
 const lv_font_t *const kDynamicCjk = &vela_cjk_16;
@@ -106,6 +106,11 @@ struct SessionRecord {
     char title[32];
     char summary[72];
     SessionStatus status;
+    uint64_t total_tokens;
+    uint64_t last_tokens;
+    uint64_t context_window_tokens;
+    uint8_t context_used_percent;
+    bool context_usage_valid;
     bool pending_approval;
     bool needs_feedback;
     BridgeApproval approval;
@@ -133,6 +138,7 @@ Surface s_error_next = Surface::Sessions;
 SessionRecord *s_selected_session = nullptr;
 char s_selected_thread_id[VELA_THREAD_ID_BYTES] = {};
 uint8_t s_quota_index = 0;
+bool s_usage_selection_initialized = false;
 int s_session_index = 0;
 DwellState s_dwell = {};
 uint32_t s_dwell_generation = 0;
@@ -171,6 +177,7 @@ char s_reject_approval_id[VELA_APPROVAL_ID_BYTES] = {};
 char s_resolved_approval_id[VELA_APPROVAL_ID_BYTES] = {};
 char s_presented_approval_id[VELA_APPROVAL_ID_BYTES] = {};
 Surface s_network_return_surface = Surface::Quota;
+Surface s_approval_return_surface = Surface::Sessions;
 
 char s_result_title[32] = "DONE";
 char s_result_subtitle[72] = "";
@@ -200,26 +207,140 @@ void show_error(
     const char *subtitle,
     Surface next);
 bool start_voice_recording(uint32_t now);
+void postpone_approval();
+
+const char *voice_purpose_name(VoicePurpose purpose)
+{
+    return purpose == VoicePurpose::NewSession
+        ? "new_session"
+        : "reject_reason";
+}
 
 void copy_text(char *destination, size_t capacity, const char *source)
 {
     vela_copy_utf8(destination, capacity, source);
 }
 
-bool has_non_ascii_text(const char *text)
+bool contains_cjk_text(const char *text)
 {
     if (text == nullptr) {
         return false;
     }
-    for (const uint8_t *cursor =
-             reinterpret_cast<const uint8_t *>(text);
-         *cursor != 0U;
-         ++cursor) {
-        if (*cursor >= 0x80U) {
+    const uint8_t *cursor =
+        reinterpret_cast<const uint8_t *>(text);
+    while (*cursor != 0U) {
+        uint32_t codepoint = 0;
+        if (*cursor < 0x80U) {
+            codepoint = *cursor++;
+        } else if ((*cursor & 0xE0U) == 0xC0U &&
+                   cursor[1] != 0U) {
+            codepoint =
+                (static_cast<uint32_t>(cursor[0] & 0x1FU) << 6U) |
+                static_cast<uint32_t>(cursor[1] & 0x3FU);
+            cursor += 2;
+        } else if ((*cursor & 0xF0U) == 0xE0U &&
+                   cursor[1] != 0U &&
+                   cursor[2] != 0U) {
+            codepoint =
+                (static_cast<uint32_t>(cursor[0] & 0x0FU) << 12U) |
+                (static_cast<uint32_t>(cursor[1] & 0x3FU) << 6U) |
+                static_cast<uint32_t>(cursor[2] & 0x3FU);
+            cursor += 3;
+        } else if ((*cursor & 0xF8U) == 0xF0U &&
+                   cursor[1] != 0U &&
+                   cursor[2] != 0U &&
+                   cursor[3] != 0U) {
+            codepoint =
+                (static_cast<uint32_t>(cursor[0] & 0x07U) << 18U) |
+                (static_cast<uint32_t>(cursor[1] & 0x3FU) << 12U) |
+                (static_cast<uint32_t>(cursor[2] & 0x3FU) << 6U) |
+                static_cast<uint32_t>(cursor[3] & 0x3FU);
+            cursor += 4;
+        } else {
+            ++cursor;
+            continue;
+        }
+
+        const bool cjk =
+            (codepoint >= 0x2E80U && codepoint <= 0x9FFFU) ||
+            (codepoint >= 0xF900U && codepoint <= 0xFAFFU) ||
+            (codepoint >= 0xFF00U && codepoint <= 0xFFEFU);
+        if (cjk) {
             return true;
         }
     }
     return false;
+}
+
+void format_token_count(uint64_t value, char *output, size_t capacity)
+{
+    if (output == nullptr || capacity == 0) {
+        return;
+    }
+    struct TokenScale {
+        uint64_t divisor;
+        const char *suffix;
+    };
+    static const TokenScale scales[] = {
+        {1000000000000ULL, "T"},
+        {1000000000ULL, "B"},
+        {1000000ULL, "M"},
+        {1000ULL, "K"},
+    };
+    for (const TokenScale &scale : scales) {
+        if (value < scale.divisor) {
+            continue;
+        }
+        const uint64_t whole = value / scale.divisor;
+        const uint64_t tenth =
+            (value % scale.divisor) / (scale.divisor / 10ULL);
+        if (whole >= 100 || tenth == 0) {
+            snprintf(
+                output,
+                capacity,
+                "%llu%s",
+                static_cast<unsigned long long>(whole),
+                scale.suffix);
+        } else {
+            snprintf(
+                output,
+                capacity,
+                "%llu.%llu%s",
+                static_cast<unsigned long long>(whole),
+                static_cast<unsigned long long>(tenth),
+                scale.suffix);
+        }
+        return;
+    }
+    snprintf(
+        output,
+        capacity,
+        "%llu",
+        static_cast<unsigned long long>(value));
+}
+
+void format_usage_date(const char *iso_date, char *output, size_t capacity)
+{
+    if (output == nullptr || capacity == 0) {
+        return;
+    }
+    if (iso_date == nullptr || strlen(iso_date) < 10) {
+        copy_text(output, capacity, "LATEST DAY");
+        return;
+    }
+    static const char *months[] = {
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+    };
+    const int month =
+        (iso_date[5] - '0') * 10 + (iso_date[6] - '0');
+    const int day =
+        (iso_date[8] - '0') * 10 + (iso_date[9] - '0');
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+        copy_text(output, capacity, "LATEST DAY");
+        return;
+    }
+    snprintf(output, capacity, "%s %d", months[month - 1], day);
 }
 
 int clamp_int(int value, int low, int high)
@@ -263,7 +384,7 @@ lv_obj_t *make_label(
     lv_label_set_text(label, text);
     lv_obj_set_style_text_font(
         label,
-        has_non_ascii_text(text) ? kDynamicCjk : font,
+        contains_cjk_text(text) ? kDynamicCjk : font,
         LV_PART_MAIN);
     lv_obj_set_style_text_color(label, color, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(label, 0, LV_PART_MAIN);
@@ -437,6 +558,14 @@ void import_session(
                 : source->summary);
         destination->status =
             session_status_from_bridge(source->state);
+        destination->total_tokens = source->total_tokens;
+        destination->last_tokens = source->last_tokens;
+        destination->context_window_tokens =
+            source->context_window_tokens;
+        destination->context_used_percent =
+            source->context_used_percent;
+        destination->context_usage_valid =
+            source->context_usage_valid;
         destination->pending_approval =
             source->approval.present &&
             !approval_is_resolved_locally(source->approval);
@@ -608,10 +737,15 @@ int list_item_count()
 
 SessionRecord *session_for_list_index(int index)
 {
-    if (index <= 0 || index > static_cast<int>(s_session_count)) {
+    if (index < 0 || index >= static_cast<int>(s_session_count)) {
         return nullptr;
     }
-    return &s_sessions[index - 1];
+    return &s_sessions[index];
+}
+
+bool list_index_is_new(int index)
+{
+    return index == static_cast<int>(s_session_count);
 }
 
 SessionRecord *find_session(const char *thread_id)
@@ -633,7 +767,7 @@ int find_session_list_index(const char *thread_id)
     if (session == nullptr) {
         return -1;
     }
-    return static_cast<int>(session - s_sessions) + 1;
+    return static_cast<int>(session - s_sessions);
 }
 
 bool same_text(const char *left, const char *right)
@@ -706,25 +840,62 @@ void render_return_hint()
     }
 
     lv_obj_t *rail = lv_arc_create(s_root);
-    lv_obj_set_pos(rail, 12, 12);
-    lv_obj_set_size(rail, 336, 336);
+    lv_obj_set_pos(rail, 6, 6);
+    lv_obj_set_size(rail, 348, 348);
     lv_arc_set_bg_angles(rail, 0, 126);
     lv_arc_set_rotation(rail, 117);
-    lv_obj_set_style_arc_width(rail, 2, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(rail, kBorder, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(rail, LV_OPA_70, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(rail, 5, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(rail, kCyan, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(rail, true, LV_PART_INDICATOR);
-    lv_arc_set_range(rail, 0, 100);
-    lv_arc_set_value(rail, 58);
+    lv_obj_set_style_arc_width(rail, 1, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(rail, kCyan, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(rail, LV_OPA_30, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(rail, LV_OPA_TRANSP, LV_PART_INDICATOR);
     lv_obj_remove_style(rail, nullptr, LV_PART_KNOB);
     lv_obj_clear_flag(rail, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *arrow =
-        make_label(s_root, LV_SYMBOL_LEFT, &lv_font_montserrat_20, kCyan);
-    lv_obj_set_pos(arrow, 13, 166);
+    auto make_scan_segment = [](int rotation,
+                                int sweep,
+                                int width,
+                                lv_opa_t opacity) {
+        lv_obj_t *segment = lv_arc_create(s_root);
+        lv_obj_set_pos(segment, 6, 6);
+        lv_obj_set_size(segment, 348, 348);
+        lv_arc_set_bg_angles(segment, 0, sweep);
+        lv_arc_set_rotation(segment, rotation);
+        lv_obj_set_style_arc_width(segment, width, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(segment, kCyan, LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(segment, opacity, LV_PART_MAIN);
+        lv_obj_set_style_arc_rounded(segment, true, LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(
+            segment, LV_OPA_TRANSP, LV_PART_INDICATOR);
+        lv_obj_remove_style(segment, nullptr, LV_PART_KNOB);
+        lv_obj_clear_flag(segment, LV_OBJ_FLAG_CLICKABLE);
+        return segment;
+    };
+    make_scan_segment(142, 25, 3, LV_OPA_COVER);
+    make_scan_segment(196, 11, 2, LV_OPA_50);
+
+    static const lv_point_t kArrowPoints[] = {
+        {11, 0},
+        {0, 8},
+        {11, 13},
+    };
+    lv_obj_t *arrow = lv_line_create(s_root);
+    lv_line_set_points(
+        arrow,
+        kArrowPoints,
+        sizeof(kArrowPoints) / sizeof(kArrowPoints[0]));
+    lv_obj_set_pos(arrow, 38, 296);
+    lv_obj_set_style_line_color(arrow, kCyan, LV_PART_MAIN);
+    lv_obj_set_style_line_width(arrow, 2, LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(arrow, true, LV_PART_MAIN);
+    lv_obj_clear_flag(arrow, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_move_foreground(arrow);
+
+    lv_obj_t *ccw =
+        make_label(s_root, "CCW", &lv_font_montserrat_14, kCyan);
+    lv_obj_set_pos(ccw, 18, 154);
+    lv_obj_t *caption =
+        make_label(s_root, "再向左旋", kCjk, kText);
+    lv_obj_set_pos(caption, 18, 174);
 }
 
 void apply_led_state()
@@ -952,7 +1123,7 @@ void render_sending()
          operation.http_status >= 500);
     const char *status = "Waiting for Bridge ACK";
     if (recording_saved_for_retry) {
-        status = "Saved on device · will retry";
+        status = "Saved on device / will retry";
     } else if (!s_bridge_snapshot.connectivity.wifi_connected) {
         status = "Wi-Fi interrupted";
     } else if (!s_bridge_snapshot.bridge_online) {
@@ -979,134 +1150,240 @@ void render_sending()
         230);
 }
 
-void render_quota()
+int usage_page_count()
 {
-    render_header("USAGE");
+    const int quota_count =
+        static_cast<int>(s_bridge_snapshot.quota_window_count);
+    const int token_count =
+        s_bridge_snapshot.account_tokens.valid ? 1 : 0;
+    return quota_count + token_count > 0
+        ? quota_count + token_count
+        : 1;
+}
 
-    const BridgeQuotaWindow &quota =
-        s_quota_index == 0
-            ? s_bridge_snapshot.quota_5h
-            : s_bridge_snapshot.quota_7d;
-    const int value = quota.valid
-        ? clamp_int(quota.used_percent, 0, 100)
-        : 0;
-
-    lv_obj_t *arc = lv_arc_create(s_root);
-    lv_obj_set_pos(arc, 100, 72);
-    lv_obj_set_size(arc, 160, 160);
-    lv_arc_set_bg_angles(arc, 0, 270);
-    lv_arc_set_rotation(arc, 135);
-    lv_arc_set_range(arc, 0, 100);
-    lv_arc_set_value(arc, value);
-    lv_obj_set_style_arc_width(arc, 8, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(arc, kBorder, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, 8, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc, kCyan, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
-    lv_obj_remove_style(arc, nullptr, LV_PART_KNOB);
-    lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
-
-    make_centered_label(s_root, "USED", &lv_font_montserrat_14, kMuted, 99, 90);
-
-    char value_text[8] = "--";
-    if (quota.valid) {
-        snprintf(value_text, sizeof(value_text), "%d", value);
+void normalize_usage_selection()
+{
+    const int pages = usage_page_count();
+    if (!s_usage_selection_initialized &&
+        s_bridge_snapshot.quota_window_count > 0) {
+        uint8_t stressed = 0;
+        for (uint8_t index = 1;
+             index < s_bridge_snapshot.quota_window_count;
+             ++index) {
+            if (s_bridge_snapshot.quota_windows[index].used_percent >
+                s_bridge_snapshot.quota_windows[stressed].used_percent) {
+                stressed = index;
+            }
+        }
+        s_quota_index = stressed;
+        s_usage_selection_initialized = true;
+        return;
     }
-    lv_obj_t *number =
-        make_label(s_root, value_text, &lv_font_montserrat_48, kText);
-    lv_obj_set_width(number, 98);
-    lv_obj_set_style_text_align(number, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    lv_obj_set_pos(number, 105, 119);
-
-    if (quota.valid) {
-        lv_obj_t *percent =
-            make_label(s_root, "%", &lv_font_montserrat_24, kCyan);
-        lv_obj_set_pos(percent, 214, 127);
+    if (s_quota_index >= pages) {
+        s_quota_index = static_cast<uint8_t>(pages - 1);
     }
+}
 
+bool usage_page_is_tokens()
+{
+    return s_bridge_snapshot.account_tokens.valid &&
+           s_quota_index >= s_bridge_snapshot.quota_window_count;
+}
+
+void render_usage_switcher()
+{
+    const int pages = usage_page_count();
+    const int item_width = 48;
+    const int width = pages * item_width + 12;
+    const int x = (kScreenSize - width) / 2;
+    lv_obj_t *switcher =
+        make_panel(s_root, x, 218, width, 28, kPanel, kBorder, 1, 14);
+
+    for (int index = 0; index < pages; ++index) {
+        const bool token_page =
+            s_bridge_snapshot.account_tokens.valid &&
+            index >= s_bridge_snapshot.quota_window_count;
+        const char *label = token_page
+            ? "TOKEN"
+            : s_bridge_snapshot.quota_windows[index].label;
+        lv_obj_t *item = make_label(
+            switcher,
+            label[0] == '\0' ? "LIMIT" : label,
+            &lv_font_montserrat_14,
+            index == s_quota_index ? kText : kMuted);
+        lv_obj_set_width(item, item_width);
+        lv_obj_set_style_text_align(item, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_pos(item, 6 + index * item_width, 6);
+        if (index == s_quota_index) {
+            make_dot(
+                switcher,
+                9 + index * item_width,
+                11,
+                5,
+                kCyan);
+        }
+    }
+}
+
+void render_usage_footer()
+{
+    char token_text[24] = "-- TOKENS";
+    if (s_bridge_snapshot.account_tokens.valid) {
+        char compact[16];
+        format_token_count(
+            s_bridge_snapshot.account_tokens.latest_day_tokens,
+            compact,
+            sizeof(compact));
+        snprintf(token_text, sizeof(token_text), "%s TOKENS", compact);
+    }
     make_centered_label(
         s_root,
-        quota.valid
-            ? (quota.reset_label[0] == '\0'
-                   ? "RESET TIME UNKNOWN"
-                   : quota.reset_label)
-            : "WAITING FOR USAGE",
+        token_text,
         &lv_font_montserrat_14,
-        kMuted,
-        181,
-        220);
+        s_bridge_snapshot.account_tokens.valid ? kCyan : kMuted,
+        266,
+        250);
 
-    lv_obj_t *switcher =
-        make_panel(s_root, 126, 210, 108, 28, kPanel, kBorder, 1, 14);
-    lv_obj_t *five =
-        make_label(switcher, "5H", &lv_font_montserrat_14,
-                   s_quota_index == 0 ? kText : kMuted);
-    lv_obj_set_pos(five, 20, 6);
-    lv_obj_t *seven =
-        make_label(switcher, "7D", &lv_font_montserrat_14,
-                   s_quota_index == 1 ? kText : kMuted);
-    lv_obj_set_pos(seven, 70, 6);
-    make_dot(
-        switcher,
-        s_quota_index == 0 ? 8 : 58,
-        11,
-        5,
-        kCyan);
-
-    lv_obj_t *remaining =
-        make_panel(s_root, 60, 250, 116, 52, kPanel, kBorder, 1, 13);
-    char remaining_text[12] = "--";
-    if (quota.valid) {
-        snprintf(
-            remaining_text,
-            sizeof(remaining_text),
-            "%u%%",
-            static_cast<unsigned>(
-                clamp_int(quota.remaining_percent, 0, 100)));
-    }
-    make_centered_label(
-        remaining,
-        remaining_text,
-        &lv_font_montserrat_20,
-        kText,
-        7,
-        90);
-    make_centered_label(remaining, "LEFT", kCjk, kMuted, 30, 90);
-
-    lv_obj_t *sessions =
-        make_panel(s_root, 184, 250, 116, 52, kPanel, kBorder, 1, 13);
-    char session_count[12];
+    char session_text[64];
     snprintf(
-        session_count,
-        sizeof(session_count),
-        "%u",
-        static_cast<unsigned>(
-            s_bridge_snapshot.total_session_count));
+        session_text,
+        sizeof(session_text),
+        "%u 个会话 / %u 项待确认",
+        static_cast<unsigned>(s_bridge_snapshot.total_session_count),
+        static_cast<unsigned>(s_bridge_snapshot.pending_approval_count));
     make_centered_label(
-        sessions, session_count, &lv_font_montserrat_20, kText, 7, 90);
-    make_centered_label(sessions, "SESSIONS", kCjk, kMuted, 30, 100);
+        s_root,
+        session_text,
+        &lv_font_montserrat_14,
+        s_bridge_snapshot.pending_approval_count > 0 ? kAmber : kMuted,
+        294,
+        280);
 
     lv_obj_t *next =
         make_label(s_root, LV_SYMBOL_RIGHT, &lv_font_montserrat_20, kCyan);
     lv_obj_set_pos(next, 328, 169);
+}
 
-    if (s_bridge_snapshot.pending_approval_count > 0) {
-        char pending_text[24];
-        snprintf(
-            pending_text,
-            sizeof(pending_text),
-            "%u PENDING",
-            static_cast<unsigned>(
-                s_bridge_snapshot.pending_approval_count));
+void render_quota()
+{
+    make_centered_label(
+        s_root,
+        usage_page_is_tokens() ? "编程 AI / TOKEN" : "编程 AI / 额度",
+        &lv_font_montserrat_16,
+        kMuted,
+        42,
+        240);
+
+    if (usage_page_is_tokens()) {
+        const BridgeAccountTokens &tokens =
+            s_bridge_snapshot.account_tokens;
+        char latest_text[20];
+        format_token_count(
+            tokens.latest_day_tokens,
+            latest_text,
+            sizeof(latest_text));
         make_centered_label(
             s_root,
-            pending_text,
+            latest_text,
+            &lv_font_montserrat_48,
+            kText,
+            92,
+            260);
+
+        char date_text[20];
+        format_usage_date(
+            tokens.latest_day_label,
+            date_text,
+            sizeof(date_text));
+        char caption[40];
+        snprintf(caption, sizeof(caption), "%s / LATEST DAY", date_text);
+        make_centered_label(
+            s_root,
+            caption,
             &lv_font_montserrat_14,
-            kAmber,
-            320,
-            130);
+            kMuted,
+            157,
+            250);
+
+        char lifetime[20];
+        format_token_count(
+            tokens.lifetime_tokens,
+            lifetime,
+            sizeof(lifetime));
+        char account_text[56];
+        snprintf(
+            account_text,
+            sizeof(account_text),
+            "%s LIFETIME / %u DAY STREAK",
+            lifetime,
+            static_cast<unsigned>(tokens.current_streak_days));
+        make_centered_label(
+            s_root,
+            account_text,
+            &lv_font_montserrat_14,
+            kMuted,
+            187,
+            290);
+    } else if (s_bridge_snapshot.quota_window_count > 0) {
+        const BridgeQuotaWindow &quota =
+            s_bridge_snapshot.quota_windows[s_quota_index];
+        char window_title[32];
+        snprintf(
+            window_title,
+            sizeof(window_title),
+            "%s LIMIT",
+            quota.label[0] == '\0' ? "CODEX" : quota.label);
+        make_centered_label(
+            s_root,
+            window_title,
+            &lv_font_montserrat_14,
+            kCyan,
+            82,
+            180);
+
+        char value_text[8];
+        snprintf(
+            value_text,
+            sizeof(value_text),
+            "%u",
+            static_cast<unsigned>(quota.used_percent));
+        lv_obj_t *number =
+            make_label(s_root, value_text, &lv_font_montserrat_48, kText);
+        lv_obj_set_width(number, 124);
+        lv_obj_set_style_text_align(number, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+        lv_obj_set_pos(number, 77, 111);
+        lv_obj_t *percent =
+            make_label(s_root, "%", &lv_font_montserrat_24, kCyan);
+        lv_obj_set_pos(percent, 218, 120);
+
+        make_centered_label(
+            s_root,
+            quota.reset_label[0] == '\0'
+                ? "RESET TIME UNKNOWN"
+                : quota.reset_label,
+            &lv_font_montserrat_14,
+            kMuted,
+            176,
+            240);
+    } else {
+        make_centered_label(
+            s_root,
+            "--",
+            &lv_font_montserrat_48,
+            kText,
+            108,
+            240);
+        make_centered_label(
+            s_root,
+            "WAITING FOR CODEX USAGE",
+            &lv_font_montserrat_14,
+            kMuted,
+            176,
+            260);
     }
+
+    render_usage_switcher();
+    render_usage_footer();
 }
 
 void render_session_row(
@@ -1114,61 +1391,52 @@ void render_session_row(
     int y,
     bool selected)
 {
-    const bool is_new = list_index == 0;
+    const bool is_new = list_index_is_new(list_index);
     SessionRecord *session = session_for_list_index(list_index);
     const lv_color_t accent =
         is_new ? kPurple : status_color(session->status);
 
     lv_obj_t *row = make_panel(
         s_root,
-        selected ? 42 : 48,
+        selected ? 43 : 50,
         y,
-        selected ? 276 : 264,
-        60,
+        selected ? 274 : 260,
+        42,
         selected ? kPanelRaised : kPanel,
-        selected ? kCyan : kBorder,
-        selected ? 2 : 1,
-        14);
+        selected ? kCyan : lv_color_hex(0x182432),
+        1,
+        11);
 
-    make_dot(row, 12, 25, 8, selected ? accent : kMuted);
+    make_dot(row, 12, 17, 7, selected ? accent : kMuted);
 
     lv_obj_t *title = make_label(
         row,
-        is_new ? "NEW SESSION" : session->title,
+        is_new ? "新建会话" : session->title,
         is_new ? kCjk : &lv_font_montserrat_16,
         selected ? kText : kMuted);
-    lv_obj_set_pos(title, selected ? 32 : 28, 8);
-    lv_obj_set_width(title, 155);
+    lv_obj_set_pos(title, 29, 7);
+    lv_obj_set_width(title, 176);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
 
-    lv_obj_t *subtitle = make_label(
+    lv_obj_t *status = make_label(
         row,
-        is_new ? "Create a Codex task by voice" : session->summary,
-        is_new ? kCjk : &lv_font_montserrat_14,
-        kMuted);
-    lv_obj_set_pos(subtitle, selected ? 32 : 28, 34);
-    lv_obj_set_width(subtitle, 155);
-    lv_label_set_long_mode(subtitle, LV_LABEL_LONG_DOT);
-
-    lv_obj_t *pill = make_panel(
-        row, selected ? 200 : 190, 18, 64, 24, kBg, accent, 1, 12);
-    make_centered_label(
-        pill,
         is_new ? "VOICE" : status_text(session->status),
         kCjk,
-        accent,
-        3,
-        58);
+        selected ? accent : kMuted);
+    lv_obj_set_width(status, 58);
+    lv_obj_set_style_text_align(status, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_set_pos(status, selected ? 204 : 192, 8);
+    lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
 
     if (selected && s_dwell.action != DwellAction::None) {
         s_dwell_bar =
-            make_progress_bar(row, 12, 56, selected ? 252 : 240, 3, accent);
+            make_progress_bar(row, 10, 39, selected ? 254 : 240, 2, accent);
     }
 }
 
 void render_sessions()
 {
-    render_header("SESSIONS");
+    render_header("CODEX / SESSIONS");
 
     const int count = list_item_count();
     int first = s_session_index - 1;
@@ -1181,9 +1449,43 @@ void render_sessions()
         }
         render_session_row(
             index,
-            74 + visible * 67,
+            71 + visible * 48,
             index == s_session_index);
     }
+
+    const bool is_new = list_index_is_new(s_session_index);
+    SessionRecord *selected =
+        session_for_list_index(s_session_index);
+    const char *summary = is_new
+        ? "语音创建新的 Codex 会话"
+        : (selected == nullptr ? "" : selected->summary);
+    lv_obj_t *summary_label = make_centered_label(
+        s_root,
+        summary,
+        &lv_font_montserrat_16,
+        kText,
+        224,
+        258);
+    lv_obj_set_height(summary_label, 58);
+    lv_label_set_long_mode(summary_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_line_space(summary_label, 1, LV_PART_MAIN);
+
+    const char *selected_state = is_new
+        ? "READY FOR VOICE"
+        : (selected == nullptr
+               ? ""
+               : status_text(selected->status));
+    make_centered_label(
+        s_root,
+        selected_state,
+        &lv_font_montserrat_14,
+        is_new
+            ? kPurple
+            : (selected == nullptr
+                   ? kMuted
+                   : status_color(selected->status)),
+        286,
+        220);
 
     char index_text[20];
     snprintf(
@@ -1193,12 +1495,12 @@ void render_sessions()
         s_session_index + 1,
         count);
     make_centered_label(
-        s_root, index_text, &lv_font_montserrat_14, kMuted, 310, 90);
+        s_root, index_text, &lv_font_montserrat_14, kMuted, 318, 90);
 }
 
 void render_detail()
 {
-    render_header("SESSION DETAIL");
+    render_header("CODEX / SESSION");
     if (s_selected_session == nullptr) {
         return;
     }
@@ -1210,43 +1512,58 @@ void render_detail()
         s_selected_session->title,
         &lv_font_montserrat_24,
         kText,
-        79,
-        252);
+        67,
+        272);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
 
+    lv_obj_t *core =
+        make_panel(s_root, 151, 108, 58, 58, kPanel, kCyan, 1, 29);
+    lv_obj_t *core_label =
+        make_label(core, "AI", &lv_font_montserrat_20, kText);
+    lv_obj_center(core_label);
+    lv_obj_t *orbit = lv_arc_create(s_root);
+    lv_obj_set_pos(orbit, 144, 101);
+    lv_obj_set_size(orbit, 72, 72);
+    lv_arc_set_bg_angles(orbit, 18, 302);
+    lv_arc_set_rotation(orbit, 68);
+    lv_arc_set_range(orbit, 0, 100);
+    lv_arc_set_value(orbit, 74);
+    lv_obj_set_style_arc_width(orbit, 1, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(orbit, kBorder, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(orbit, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(orbit, kCyan, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(orbit, true, LV_PART_INDICATOR);
+    lv_obj_remove_style(orbit, nullptr, LV_PART_KNOB);
+    lv_obj_clear_flag(orbit, LV_OBJ_FLAG_CLICKABLE);
+
     lv_obj_t *state = make_panel(
-        s_root, 111, 119, 138, 28, kPanel, accent, 1, 14);
-    make_dot(state, 12, 10, 8, accent);
+        s_root, 115, 178, 130, 24, kBg, kBg, 0, 12);
+    make_dot(state, 12, 8, 7, accent);
     make_centered_label(
         state,
         status_text(s_selected_session->status),
         kCjk,
         accent,
-        3,
-        104);
+        0,
+        102);
 
-    lv_obj_t *summary =
-        make_panel(s_root, 52, 165, 256, 78, kPanel, kBorder, 1, 15);
-    lv_obj_t *summary_text = make_label(
-        summary,
+    make_centered_label(
+        s_root,
+        "CODEX REPLY",
+        &lv_font_montserrat_14,
+        kCyan,
+        211,
+        180);
+    lv_obj_t *summary_text = make_centered_label(
+        s_root,
         s_selected_session->summary,
         &lv_font_montserrat_16,
-        kText);
-    lv_obj_set_pos(summary_text, 16, 12);
-    lv_obj_set_width(summary_text, 224);
+        kText,
+        232,
+        266);
+    lv_obj_set_height(summary_text, 62);
     lv_label_set_long_mode(summary_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_line_space(summary_text, 4, LV_PART_MAIN);
-
-    make_dot(summary, 16, 59, 6, kCyan);
-    lv_obj_t *bridge =
-        make_label(
-            summary,
-            s_bridge_snapshot.bridge_online
-                ? "BRIDGE ONLINE"
-                : "BRIDGE OFFLINE",
-            &lv_font_montserrat_14,
-            s_bridge_snapshot.bridge_online ? kMuted : kAmber);
-    lv_obj_set_pos(bridge, 30, 54);
+    lv_obj_set_style_text_line_space(summary_text, 2, LV_PART_MAIN);
 
     if (s_selected_session->pending_approval ||
         s_selected_session->needs_feedback) {
@@ -1259,49 +1576,39 @@ void render_detail()
         const bool acquiring = dwell_active(action_kind);
         const lv_color_t action_color =
             approval_action ? kAmber : kPurple;
-        lv_obj_t *action = make_panel(
-            s_root,
-            88,
-            260,
-            184,
-            52,
-            acquiring ? kPanelRaised : kPanel,
-            acquiring ? kCyan : action_color,
-            acquiring ? 2 : 1,
-            16);
         make_centered_label(
-            action,
-            approval_action ? "REVIEW" : "ADD REASON",
+            s_root,
+            approval_action ? "REVIEW REQUEST" : "ADD REJECT REASON",
             kCjk,
             acquiring ? kText : action_color,
-            8,
-            154);
+            302,
+            230);
         lv_obj_t *chevron = make_label(
-            action, LV_SYMBOL_RIGHT, &lv_font_montserrat_16, action_color);
-        lv_obj_set_pos(chevron, 154, 16);
+            s_root, LV_SYMBOL_RIGHT, &lv_font_montserrat_16, action_color);
+        lv_obj_set_pos(chevron, 300, 301);
         if (acquiring) {
             s_dwell_bar = make_progress_bar(
-                action, 14, 47, 156, 3, action_color);
+                s_root, 105, 329, 150, 3, action_color);
         }
     } else {
-        const char *footer =
-            s_selected_session->status == SessionStatus::Complete
-                ? "READY IN MAC"
-                : "LIVE SESSION";
+        char footer[56] = "LOCAL BRIDGE / READY";
+        if (s_selected_session->context_usage_valid) {
+            char tokens[16];
+            format_token_count(
+                s_selected_session->last_tokens,
+                tokens,
+                sizeof(tokens));
+            snprintf(
+                footer,
+                sizeof(footer),
+                "CONTEXT %u%% / %s",
+                static_cast<unsigned>(
+                    s_selected_session->context_used_percent),
+                tokens);
+        }
         make_centered_label(
-            s_root, footer, &lv_font_montserrat_14, kMuted, 278, 160);
+            s_root, footer, &lv_font_montserrat_14, kMuted, 302, 220);
     }
-
-    char id_text[32];
-    snprintf(
-        id_text,
-        sizeof(id_text),
-        "THREAD %.12s",
-        s_selected_session->thread_id[0] == '\0'
-            ? "PENDING"
-            : s_selected_session->thread_id);
-    make_centered_label(
-        s_root, id_text, &lv_font_montserrat_14, kMuted, 324, 150);
 }
 
 void render_voice_listening()
@@ -1403,7 +1710,13 @@ void render_voice()
 
 void render_approval()
 {
-    render_header("APPROVAL");
+    make_centered_label(
+        s_root,
+        "CODEX / 操作确认",
+        &lv_font_montserrat_14,
+        kMuted,
+        19,
+        220);
 
     const BridgeApproval *approval = active_approval();
     const char *title =
@@ -1416,66 +1729,83 @@ void render_approval()
             : "Request is no longer available";
 
     lv_obj_t *title_label = make_centered_label(
-        s_root, title, &lv_font_montserrat_20, kText, 76, 250);
+        s_root, title, &lv_font_montserrat_20, kText, 57, 270);
     lv_label_set_long_mode(title_label, LV_LABEL_LONG_DOT);
 
-    lv_obj_t *detail =
-        make_panel(s_root, 56, 111, 248, 82, kPanel, kBorder, 1, 15);
-    lv_obj_t *detail_label = make_label(
-        detail, description, &lv_font_montserrat_14, kMuted);
-    lv_obj_set_pos(detail_label, 15, 13);
-    lv_obj_set_width(detail_label, 218);
-    lv_obj_set_height(detail_label, 58);
+    lv_obj_t *detail_label = make_centered_label(
+        s_root,
+        description,
+        &lv_font_montserrat_14,
+        kMuted,
+        93,
+        244);
+    lv_obj_set_height(detail_label, 56);
     lv_label_set_long_mode(detail_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(
-        detail_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_style_text_line_space(
-        detail_label, 3, LV_PART_MAIN);
+        detail_label, 2, LV_PART_MAIN);
 
     const bool reject = dwell_active(DwellAction::SubmitReject);
     const bool allow = dwell_active(DwellAction::SubmitAllow);
 
-    lv_obj_t *rail = make_panel(
-        s_root, 78, 223, 204, 3, kBorder, kBorder, 0, 2);
-    (void)rail;
-    make_dot(s_root, 73, 216, 16, reject ? kRed : kBorder);
-    make_dot(s_root, 172, 216, 16, (!reject && !allow) ? kAmber : kBorder);
-    make_dot(s_root, 271, 216, 16, allow ? kGreen : kBorder);
+    make_panel(s_root, 71, 202, 218, 2, kBorder, kBorder, 0, 1);
+    make_panel(
+        s_root,
+        71,
+        202,
+        109,
+        2,
+        reject ? kRed : lv_color_hex(0x493039),
+        reject ? kRed : lv_color_hex(0x493039),
+        0,
+        1);
+    make_panel(
+        s_root,
+        180,
+        202,
+        109,
+        2,
+        allow ? kGreen : lv_color_hex(0x244535),
+        allow ? kGreen : lv_color_hex(0x244535),
+        0,
+        1);
+
+    const int selector_x = reject ? 66 : (allow ? 281 : 174);
+    const lv_color_t selector_color =
+        reject ? kRed : (allow ? kGreen : kAmber);
+    make_dot(s_root, selector_x, 194, 18, selector_color);
+    make_dot(s_root, selector_x + 6, 200, 6, kBg);
 
     lv_obj_t *deny =
-        make_label(s_root, "REJECT", kCjk, reject ? kRed : kMuted);
-    lv_obj_set_pos(deny, 51, 247);
+        make_label(s_root, "拒绝", kCjk, reject ? kRed : kMuted);
+    lv_obj_set_pos(deny, 66, 223);
     lv_obj_t *approve =
-        make_label(s_root, "ALLOW", kCjk, allow ? kGreen : kMuted);
-    lv_obj_set_pos(approve, 267, 247);
+        make_label(s_root, "通过", kCjk, allow ? kGreen : kMuted);
+    lv_obj_set_pos(approve, 264, 223);
 
     const char *decision = approval == nullptr
-        ? "REQUEST EXPIRED"
+        ? "请求已失效"
         : (reject
-               ? "CONFIRM REJECT"
-               : (allow ? "CONFIRM ALLOW" : "SELECT"));
+               ? "确认拒绝"
+               : (allow ? "确认通过" : "等待决定"));
     const lv_color_t decision_color =
         approval == nullptr
             ? kMuted
             : (reject ? kRed : (allow ? kGreen : kAmber));
     make_centered_label(
-        s_root, decision, kCjk, decision_color, 272, 160);
+        s_root, decision, kCjk, decision_color, 263, 210);
 
     if (approval != nullptr && (reject || allow)) {
         s_dwell_bar =
-            make_progress_bar(s_root, 104, 306, 152, 5, decision_color);
+            make_progress_bar(s_root, 96, 300, 168, 4, decision_color);
     }
 
-    char request_text[32] = "REQUEST";
-    if (approval != nullptr && approval->approval_id[0] != '\0') {
-        snprintf(
-            request_text,
-            sizeof(request_text),
-            "REQUEST %.10s",
-            approval->approval_id);
-    }
     make_centered_label(
-        s_root, request_text, &lv_font_montserrat_14, kMuted, 327, 190);
+        s_root,
+        approval == nullptr ? "返回会话列表后刷新" : "CODEX PERMISSION",
+        kCjk,
+        kMuted,
+        326,
+        210);
 }
 
 void render_result()
@@ -1615,7 +1945,7 @@ void open_sessions(bool select_new, bool arm_selection)
     reset_back_hint();
     s_surface = Surface::Sessions;
     if (select_new) {
-        s_session_index = 0;
+        s_session_index = static_cast<int>(s_session_count);
     } else {
         s_session_index = clamp_int(
             s_session_index, 0, list_item_count() - 1);
@@ -1624,7 +1954,7 @@ void open_sessions(bool select_new, bool arm_selection)
         SessionRecord *session =
             session_for_list_index(s_session_index);
         start_dwell(
-            s_session_index == 0
+            list_index_is_new(s_session_index)
                 ? DwellAction::NewSession
                 : DwellAction::OpenSession,
             session == nullptr ? nullptr : session->thread_id);
@@ -1658,6 +1988,10 @@ bool start_voice_recording(uint32_t now)
     s_last_audio_frame_ms = now;
     s_recording_requested = board_recording_start();
     if (s_recording_requested) {
+        Serial.printf(
+            "[VOICE] Start accepted purpose=%s at=%lu\n",
+            voice_purpose_name(s_voice_purpose),
+            static_cast<unsigned long>(now));
         s_voice_stage = VoiceStage::Listening;
         return true;
     }
@@ -1666,6 +2000,13 @@ bool start_voice_recording(uint32_t now)
     if (recording.starting ||
         recording.recording ||
         recording.stopping) {
+        Serial.printf(
+            "[VOICE] Recorder transition pending purpose=%s"
+            " starting=%d recording=%d stopping=%d\n",
+            voice_purpose_name(s_voice_purpose),
+            recording.starting,
+            recording.recording,
+            recording.stopping);
         s_voice_stage = VoiceStage::Preparing;
         return false;
     }
@@ -1697,6 +2038,15 @@ void enter_voice(VoicePurpose purpose)
     s_recording_started = false;
 
     const RecordingStatus recording = board_get_recording_status();
+    Serial.printf(
+        "[VOICE] Enter purpose=%s available=%d"
+        " starting=%d recording=%d stopping=%d error=%s\n",
+        voice_purpose_name(purpose),
+        recording.available,
+        recording.starting,
+        recording.recording,
+        recording.stopping,
+        recording.error[0] == '\0' ? "-" : recording.error);
     if (recording.starting || recording.recording) {
         (void)board_recording_stop();
     }
@@ -1726,6 +2076,18 @@ void enter_approval()
     }
     cancel_dwell();
     reset_back_hint();
+    if (s_surface != Surface::Approval) {
+        s_approval_return_surface =
+            s_surface == Surface::Quota ||
+                    s_surface == Surface::Sessions ||
+                    s_surface == Surface::Detail
+                ? s_surface
+                : Surface::Sessions;
+    }
+    copy_text(
+        s_presented_approval_id,
+        sizeof(s_presented_approval_id),
+        approval->approval_id);
     if (approval->thread_id[0] != '\0') {
         copy_text(
             s_selected_thread_id,
@@ -1736,6 +2098,30 @@ void enter_approval()
     s_surface = Surface::Approval;
     board_play_haptic(1);
     render_surface();
+}
+
+void postpone_approval()
+{
+    const BridgeApproval *approval = active_approval();
+    Serial.printf(
+        "[APPROVAL] Postponed id=%.12s return=%u\n",
+        approval == nullptr ? "" : approval->approval_id,
+        static_cast<unsigned>(s_approval_return_surface));
+    cancel_dwell();
+    reset_back_hint();
+
+    if (s_approval_return_surface == Surface::Quota) {
+        open_quota();
+        return;
+    }
+    if (s_approval_return_surface == Surface::Detail) {
+        SessionRecord *session = find_session(s_selected_thread_id);
+        if (session != nullptr) {
+            enter_detail(session);
+            return;
+        }
+    }
+    open_sessions(false, false);
 }
 
 void arm_or_take_back(Surface destination)
@@ -1789,17 +2175,15 @@ void cancel_voice_and_return()
 
 void handle_quota_detent(int direction)
 {
-    if (direction > 0) {
-        if (s_quota_index == 0) {
-            s_quota_index = 1;
-            render_surface();
-        } else {
-            open_sessions(true, true);
-        }
-    } else if (s_quota_index == 1) {
-        s_quota_index = 0;
-        render_surface();
+    const int pages = usage_page_count();
+    if (pages <= 1 || direction == 0) {
+        return;
     }
+    s_quota_index = static_cast<uint8_t>(
+        (static_cast<int>(s_quota_index) +
+         (direction > 0 ? 1 : pages - 1)) %
+        pages);
+    render_surface();
 }
 
 void handle_sessions_detent(int direction)
@@ -1814,11 +2198,14 @@ void handle_sessions_detent(int direction)
         0,
         list_item_count() - 1);
     if (next == s_session_index) {
-        if (s_dwell.action != DwellAction::None) {
+        if (list_index_is_new(s_session_index) && direction > 0) {
+            start_dwell(DwellAction::NewSession, nullptr);
+            render_surface();
+        } else if (s_dwell.action != DwellAction::None) {
             SessionRecord *session =
                 session_for_list_index(s_session_index);
             start_dwell(
-                s_session_index == 0
+                list_index_is_new(s_session_index)
                     ? DwellAction::NewSession
                     : DwellAction::OpenSession,
                 session == nullptr ? nullptr : session->thread_id);
@@ -1832,7 +2219,7 @@ void handle_sessions_detent(int direction)
     SessionRecord *session =
         session_for_list_index(s_session_index);
     start_dwell(
-        s_session_index == 0
+        list_index_is_new(s_session_index)
             ? DwellAction::NewSession
             : DwellAction::OpenSession,
         session == nullptr ? nullptr : session->thread_id);
@@ -1981,6 +2368,14 @@ bool queue_recording_upload(
     VoicePurpose purpose)
 {
     const bool is_new = purpose == VoicePurpose::NewSession;
+    Serial.printf(
+        "[VOICE] Queue upload purpose=%s path=%s bytes=%lu"
+        " duration=%lums dropped=%lu\n",
+        voice_purpose_name(purpose),
+        recording.path,
+        static_cast<unsigned long>(recording.data_bytes),
+        static_cast<unsigned long>(recording.duration_ms),
+        static_cast<unsigned long>(recording.dropped_chunks));
     const bool queued = bridge_client_upload_recording(
         recording.path,
         is_new
@@ -2071,6 +2466,13 @@ void begin_voice_finalize()
     }
 
     const RecordingStatus recording = board_get_recording_status();
+    Serial.printf(
+        "[VOICE] Finalize requested purpose=%s path=%s bytes=%lu"
+        " duration=%lums\n",
+        voice_purpose_name(s_voice_purpose),
+        recording.path,
+        static_cast<unsigned long>(recording.data_bytes),
+        static_cast<unsigned long>(recording.duration_ms));
     if (recording.starting || recording.recording) {
         board_recording_stop();
     }
@@ -2156,7 +2558,11 @@ void process_voice(uint32_t now)
 
     if (s_voice_stage == VoiceStage::Listening) {
         const RecordingStatus recording = board_get_recording_status();
-        if (recording.recording) {
+        if (recording.recording && !s_recording_started) {
+            Serial.printf(
+                "[VOICE] Recording active purpose=%s path=%s\n",
+                voice_purpose_name(s_voice_purpose),
+                recording.path);
             s_recording_started = true;
         }
 
@@ -2220,12 +2626,26 @@ void process_voice(uint32_t now)
             audio.rms_db >= active_threshold;
 
         if (speech) {
+            if (!s_speech_seen) {
+                Serial.printf(
+                    "[VOICE] Speech detected purpose=%s rms=%.1fdB"
+                    " elapsed=%lums\n",
+                    voice_purpose_name(s_voice_purpose),
+                    static_cast<double>(audio.rms_db),
+                    static_cast<unsigned long>(elapsed));
+            }
             s_speech_seen = true;
             s_last_speech_ms = now;
         }
 
         if (s_speech_seen &&
             now - s_last_speech_ms >= kVoiceSilenceMs) {
+            Serial.printf(
+                "[VOICE] Silence timeout purpose=%s silence=%lums"
+                " elapsed=%lums\n",
+                voice_purpose_name(s_voice_purpose),
+                static_cast<unsigned long>(now - s_last_speech_ms),
+                static_cast<unsigned long>(elapsed));
             begin_voice_finalize();
             return;
         }
@@ -2255,6 +2675,16 @@ void process_voice(uint32_t now)
         !recording.starting && !recording.recording && !recording.stopping;
     if (!recording_finished) {
         if (now - s_voice_finalize_started_ms >= kVoiceFinalizeMaxMs) {
+            Serial.printf(
+                "[VOICE] Save timeout purpose=%s"
+                " starting=%d recording=%d stopping=%d"
+                " bytes=%lu error=%s\n",
+                voice_purpose_name(s_voice_purpose),
+                recording.starting,
+                recording.recording,
+                recording.stopping,
+                static_cast<unsigned long>(recording.data_bytes),
+                recording.error[0] == '\0' ? "-" : recording.error);
             show_error(
                 "SAVE TIMEOUT",
                 "Recording is still saving. Not sent.",
@@ -2265,6 +2695,15 @@ void process_voice(uint32_t now)
         return;
     }
 
+    Serial.printf(
+        "[VOICE] Save finished purpose=%s path=%s bytes=%lu"
+        " duration=%lums dropped=%lu error=%s\n",
+        voice_purpose_name(s_voice_purpose),
+        recording.path,
+        static_cast<unsigned long>(recording.data_bytes),
+        static_cast<unsigned long>(recording.duration_ms),
+        static_cast<unsigned long>(recording.dropped_chunks),
+        recording.error[0] == '\0' ? "-" : recording.error);
     const bool recording_valid =
         s_recording_requested &&
         s_recording_started &&
@@ -2622,6 +3061,7 @@ void sync_bridge_snapshot(bool force_render)
     s_bridge_generation = latest.generation;
     s_remote_revision = latest.remote_revision;
     s_connectivity_revision = latest.connectivity.revision;
+    normalize_usage_selection();
 
     if (!latest.current_approval.present ||
         !same_text(
@@ -2679,6 +3119,12 @@ void sync_bridge_snapshot(bool force_render)
         may_show_network_surface()) {
         cancel_dwell();
         reset_back_hint();
+        s_approval_return_surface =
+            s_surface == Surface::Quota ||
+                    s_surface == Surface::Sessions ||
+                    s_surface == Surface::Detail
+                ? s_surface
+                : Surface::Sessions;
         copy_text(
             s_selected_thread_id,
             sizeof(s_selected_thread_id),
@@ -2769,7 +3215,7 @@ void root_event(lv_event_t *event)
     const lv_dir_t direction = lv_indev_get_gesture_dir(input);
 
     if (s_surface == Surface::Quota && direction == LV_DIR_RIGHT) {
-        open_sessions(true, true);
+        open_sessions(false, true);
         return;
     }
     if (s_surface == Surface::Sessions && direction == LV_DIR_LEFT) {
@@ -2778,6 +3224,10 @@ void root_event(lv_event_t *event)
     }
     if (s_surface == Surface::Detail && direction == LV_DIR_LEFT) {
         open_sessions(false, false);
+        return;
+    }
+    if (s_surface == Surface::Approval && direction == LV_DIR_LEFT) {
+        postpone_approval();
         return;
     }
     if (s_surface == Surface::Voice && direction == LV_DIR_LEFT) {
@@ -2816,6 +3266,7 @@ void app_ui_begin()
 
     s_surface = Surface::Quota;
     s_quota_index = 0;
+    s_usage_selection_initialized = false;
     s_session_index = 0;
     s_selected_session = nullptr;
     s_selected_thread_id[0] = '\0';
@@ -2847,7 +3298,6 @@ void app_ui_poll()
     process_dwell(now);
     process_voice(now);
     process_transient_states(now);
-
     if (ui_tick &&
         s_surface == Surface::Voice &&
         s_voice_stage == VoiceStage::Listening) {

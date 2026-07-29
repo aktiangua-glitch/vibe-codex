@@ -239,6 +239,16 @@ void parse_quota_window(
     if (!window->valid) {
         return;
     }
+    window->window_minutes = static_cast<uint32_t>(
+        object_u64(object, "window_minutes", "windowMinutes"));
+    copy_text(
+        window->key,
+        sizeof(window->key),
+        object_text(object, "key", nullptr));
+    copy_text(
+        window->label,
+        sizeof(window->label),
+        object_text(object, "label", nullptr));
     window->used_percent =
         clamp_percent(used.as<uint64_t>());
     JsonVariantConst remaining = object["remaining_percent"];
@@ -429,12 +439,95 @@ bool parse_snapshot_payload(
         object_u64(root, "revision", nullptr);
     JsonObjectConst quota =
         object_member(root, "quota", "usage");
+
+    memset(
+        s_worker_snapshot.quota_windows,
+        0,
+        sizeof(s_worker_snapshot.quota_windows));
+    s_worker_snapshot.quota_window_count = 0;
+    JsonArrayConst quota_windows =
+        quota["windows"].as<JsonArrayConst>();
+    for (JsonObjectConst object : quota_windows) {
+        if (s_worker_snapshot.quota_window_count >=
+            VELA_MAX_QUOTA_WINDOWS) {
+            break;
+        }
+        BridgeQuotaWindow &window =
+            s_worker_snapshot.quota_windows[
+                s_worker_snapshot.quota_window_count];
+        parse_quota_window(object, &window);
+        if (window.valid) {
+            ++s_worker_snapshot.quota_window_count;
+        }
+    }
+
     parse_quota_window(
         object_member(quota, "five_hour", "fiveHour", "5h"),
         &s_worker_snapshot.quota_5h);
     parse_quota_window(
         object_member(quota, "seven_day", "sevenDay", "7d"),
         &s_worker_snapshot.quota_7d);
+    if (s_worker_snapshot.quota_5h.valid) {
+        s_worker_snapshot.quota_5h.window_minutes = 300;
+        if (s_worker_snapshot.quota_5h.label[0] == '\0') {
+            copy_text(
+                s_worker_snapshot.quota_5h.label,
+                sizeof(s_worker_snapshot.quota_5h.label),
+                "5H");
+        }
+    }
+    if (s_worker_snapshot.quota_7d.valid) {
+        s_worker_snapshot.quota_7d.window_minutes = 10080;
+        if (s_worker_snapshot.quota_7d.label[0] == '\0') {
+            copy_text(
+                s_worker_snapshot.quota_7d.label,
+                sizeof(s_worker_snapshot.quota_7d.label),
+                "7D");
+        }
+    }
+    if (s_worker_snapshot.quota_window_count == 0) {
+        if (s_worker_snapshot.quota_5h.valid) {
+            s_worker_snapshot.quota_windows[
+                s_worker_snapshot.quota_window_count++] =
+                s_worker_snapshot.quota_5h;
+        }
+        if (s_worker_snapshot.quota_7d.valid &&
+            s_worker_snapshot.quota_window_count <
+                VELA_MAX_QUOTA_WINDOWS) {
+            s_worker_snapshot.quota_windows[
+                s_worker_snapshot.quota_window_count++] =
+                s_worker_snapshot.quota_7d;
+        }
+    }
+
+    memset(
+        &s_worker_snapshot.account_tokens,
+        0,
+        sizeof(s_worker_snapshot.account_tokens));
+    JsonObjectConst tokens =
+        object_member(quota, "tokens", "tokenUsage");
+    if (!tokens.isNull()) {
+        s_worker_snapshot.account_tokens.valid =
+            object_bool(tokens, "valid", nullptr, true);
+        s_worker_snapshot.account_tokens.lifetime_tokens =
+            object_u64(tokens, "lifetime_tokens", "lifetimeTokens");
+        s_worker_snapshot.account_tokens.latest_day_tokens =
+            object_u64(tokens, "latest_day_tokens", "latestDayTokens");
+        s_worker_snapshot.account_tokens.peak_daily_tokens =
+            object_u64(tokens, "peak_daily_tokens", "peakDailyTokens");
+        const uint64_t streak_days =
+            object_u64(
+                tokens,
+                "current_streak_days",
+                "currentStreakDays");
+        s_worker_snapshot.account_tokens.current_streak_days =
+            static_cast<uint16_t>(
+                streak_days > UINT16_MAX ? UINT16_MAX : streak_days);
+        copy_text(
+            s_worker_snapshot.account_tokens.latest_day_label,
+            sizeof(s_worker_snapshot.account_tokens.latest_day_label),
+            object_text(tokens, "latest_day_label", "latestDayLabel"));
+    }
 
     memset(
         s_worker_snapshot.sessions,
@@ -467,6 +560,27 @@ bool parse_snapshot_payload(
             object_text(object, "summary", nullptr));
         session.state = parse_session_state(
             object_text(object, "state", "status"));
+        session.total_tokens =
+            object_u64(object, "total_tokens", "totalTokens");
+        session.last_tokens =
+            object_u64(object, "last_tokens", "lastTokens");
+        session.context_window_tokens =
+            object_u64(
+                object,
+                "context_window_tokens",
+                "contextWindowTokens");
+        JsonVariantConst context_percent =
+            object["context_used_percent"];
+        if (context_percent.isNull()) {
+            context_percent = object["contextUsedPercent"];
+        }
+        session.context_usage_valid =
+            !context_percent.isNull() &&
+            session.context_window_tokens > 0;
+        session.context_used_percent =
+            session.context_usage_valid
+                ? clamp_percent(context_percent.as<uint64_t>())
+                : 0;
         session.needs_feedback =
             object_bool(
                 object,

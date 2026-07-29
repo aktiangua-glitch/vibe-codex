@@ -9,13 +9,14 @@ Codex。
 - 可烧录的 ESP32 固件
 - 可直接启动的 Java Bridge
 - 编译期私有 Wi-Fi 配置与开放 AP 兜底配网
-- 真实 Codex 额度与会话
+- 动态 Codex 额度、Token 用量与会话上下文
 - 新会话语音输入
 - 旋钮审批与拒绝理由语音回传
 - 录音掉线重试、请求幂等和审批安全绑定
 
-2026-07-30 已把当前固件烧录到实机，并完成启动稳定性与板载硬件初始化检查。
-Wi-Fi 配网、Bridge、真实语音识别和 Codex 写操作仍需继续做端到端验收。
+2026-07-30 已用上一版固件完成 Wi-Fi、Java Bridge、火山引擎语音识别、
+新建 Codex 会话与回复回显的端到端联调。本次动态额度、Token 与中文字库修复
+已完成离线构建和 Bridge 验收，等待下一次连接硬件后烧录复验。
 
 ## 整体架构
 
@@ -34,12 +35,12 @@ Wi-Fi 配网、Bridge、真实语音识别和 Codex 写操作仍需继续做端�
                 ▼
 ┌──────────────────────────────────────┐
 │ Codex app-server                    │
-│ 额度 · Thread · Turn · 审批 · 事件  │
+│ 额度 · Token · Thread · Turn · 审批 │
 └──────────────────────────────────────┘
 
-可选语音路径：
+当前实机语音路径：
 TF 卡 WAV → Java Bridge → 火山引擎极速版 ASR → 文本 → Codex
-默认语音路径：
+可选回退路径：
 TF 卡 WAV → Java Bridge → Codex localAudio
 
 计划中的长语音路径：
@@ -70,24 +71,40 @@ ESP32 PCM 音频流 → Java Bridge → 火山引擎双向流式 ASR → 文本 
 
 ## 旋钮优先的 AI 流程
 
-### 额度
+### 额度与 Token
 
 开机联网后默认进入额度页。
 
-- 默认显示 5H
-- 右转一格切换到 7D
-- 在 7D 再右转一格进入会话列表
-- 左转回到 5H
-- app-server 没有提供某个额度窗口时显示未知，不伪造成 `0%`
+- 额度窗口来自 `account/rateLimits/read`，按 app-server 实际返回的
+  `windowDurationMins` 动态生成，不再写死 `5H / 7D`
+- 默认显示当前 `usedPercent` 最高、压力最大的窗口
+- 旋钮只在实际存在的额度窗口与 `TOKEN` 页之间循环；不存在的窗口不占位置，
+  也不会伪造成 `0%`
+- 当前账户可能只返回一个 `7D` 窗口，此时旋钮只在 `7D / TOKEN` 之间切换
+- `TOKEN` 页来自官方 `account/usage/read`，显示最近一天与累计 Token 等账户级
+  统计
+- 右滑进入会话列表；额度页继续旋转仍只负责切换用量视图
+
+额度百分比与 Token 不是同一指标：前者是服务端配额窗口，后者是账户活动统计。
+会话详情中的上下文占用来自 `thread/tokenUsage/updated`，计算方式为：
+
+```text
+(last.totalTokens - last.reasoningOutputTokens) / modelContextWindow
+```
+
+这里使用“最后一次上下文”而不是累计 Token，避免长会话被错误显示为超过 100%。
 
 ### 会话
 
-会话列表第一项固定为“新会话”，后面最多显示 5 个真实 Codex 会话。
+会话列表先显示最多 5 个真实 Codex 会话，“新会话”固定放在列表末尾，避免每次
+打开列表时首先停在高频误触动作上。
 
 - 旋钮选择条目
 - 停留 3 秒进入
 - 继续旋转会立即取消旧计时并重新计时
 - 任意已有会话都先进入详情，不会从列表直接跳审批
+- 详情卡的 `CODEX REPLY` 显示最后一条助手消息；Bridge 重启后会用官方
+  `thread/read(includeTurns=true)` 自动恢复，而不是退回成用户输入预览
 - 列表左边界第一次继续左转显示外圈返回提示，再左转一次才返回
 
 ### 新会话语音
@@ -119,6 +136,8 @@ NVS 中保留幂等标记，重连或重启后继续同一次上传，不会重�
 - 拒绝决定先成立，随后自动录制拒绝理由
 - 拒绝理由静默 2 秒后自动发回同一个 Thread
 - 录音失败时保留 `ADD REASON`，不会撤销或重复提交拒绝
+- 审批页左滑为“稍后处理”：返回被打断前的页面，审批仍保留，同一条请求
+  不会立即再次抢占
 
 触摸只保留为少量快捷入口；不用触屏也能完成额度、会话、语音和审批主流程。
 
@@ -161,6 +180,17 @@ export VELA_DEFAULT_CWD='/path/to/your/codex/workspace'
 java -jar target/vela-dial-bridge-0.1.0-SNAPSHOT.jar
 ```
 
+Spring Boot 会自动读取 `bridge/config/application.yml`。本机开发可从无密钥示例
+创建本地配置：
+
+```sh
+cd vela-dial-ai/bridge
+cp config/application.example.yml config/application.yml
+```
+
+真实 `config/application.yml` 已被 Git 忽略，可在里面设置火山 ASR provider、
+API Key 和 Resource ID；仓库只提交 `application.example.yml`。
+
 不要把 Token、Codex 凭据或火山密钥写入 ESP32 源码或提交到 Git。
 
 ### 2. 设备 AP 配网
@@ -198,13 +228,14 @@ Preferences 结构保存；Codex、火山引擎等服务密钥始终只保存在
 
 ### 3. 选择语音方案
 
-默认直接使用 Codex 官方 `localAudio` 输入，不需要额外语音服务：
+仓库安全默认值可以使用 Codex `localAudio`：
 
 ```sh
 export VELA_ASR_PROVIDER=codex
 ```
 
-如果后续更看重中文识别的可控性，可切换火山引擎：
+当前实机已切换并验证火山引擎。除了环境变量，也可以把同名属性写入已忽略的
+`bridge/config/application.yml`：
 
 ```sh
 export VELA_ASR_PROVIDER=volcengine
@@ -212,7 +243,7 @@ export VOLCENGINE_ASR_API_KEY='你的 APP Key'
 export VOLCENGINE_ASR_RESOURCE_ID='volc.bigasr.auc_turbo'
 ```
 
-火山密钥只保存在 Mac 环境变量中，永远不下发设备。
+火山密钥只保存在 Mac 的 Spring Boot 本地配置或环境变量中，永远不下发设备。
 
 当前固件采用“先在 TF 卡生成完整 WAV，再上传 Bridge”的可靠路径，并设置
 30 秒单句安全上限。若要做长时间听写，不应继续放大 WAV、PSRAM 与 HTTP
@@ -272,24 +303,32 @@ bridge/target/vela-dial-bridge-0.1.0-SNAPSHOT.jar
 2026-07-29 至 2026-07-30 验证结果：
 
 - ESP32 固件完整构建成功
-- RAM：179,948 / 327,680 bytes（54.9%）
-- Flash：2,675,180 / 8,388,608 bytes（31.9%）
+- RAM：181,956 / 327,680 bytes（55.5%）
+- Flash：2,680,820 / 8,388,608 bytes（32.0%，无本机私有配置的干净构建）
 - 实机自动识别到 16 MB Flash 与 8 MB PSRAM
 - 屏幕、触摸、旋钮、TF 卡、麦克风、扬声器、灯环与 DRV2605L 初始化通过
 - 修复首次 UI 同步的 `loopTask` 栈溢出，并为 Wi-Fi/音频保留内部 DMA 内存
-- 内置 Noto Sans CJK SC 16px Flash 字库，并使用 UTF-8 安全截断，中文会话
-  标题与摘要不再因缺字或半个字符截断而乱码
+- 内置 Noto Sans CJK SC 16px Flash 字库，开启压缩字体解码，并把 CJK 文本
+  与 LVGL 系统图标分开选字体；配合 UTF-8 安全截断消除整段中文方块的根因。
+  这项修复已通过编译，仍需下一次实机烧录确认最终像素效果
 - 新会话实机录音 3.88 秒，WAV 保存完整且丢帧为 0
 - 连续静音 2 秒自动结束录音、上传 Bridge，并成功创建 Codex Thread
+- 火山引擎新版 `X-Api-Key` 与 `volc.bigasr.auc_turbo` 实测通过；9.07 秒
+  历史录音和最新 3.9 秒录音都成功识别
+- 最新语音“你好你好。”已创建 Codex Thread，并取得回复“你好，我在。”
 - 录音状态冲突改为等待上一条保存完成后自动开始，不再直接显示
   `Recording unavailable`
+- 火山返回 `20000003` 时明确显示“没有听到说话，请重试”，不再笼统报录音失败
 - 修复版烧录校验通过，串口连续观察未再出现 panic 或自动重启
-- Java 16 项测试全部通过，0 failure / 0 error
+- Java 24 项测试全部通过，0 failure / 0 error
 - Spring 应用上下文启动测试通过
 - Java 21 可执行 JAR 启动成功
 - Bridge 成功连接当前 ChatGPT 内置 Codex app-server
-- 真实读取到非空额度与会话数据，并按设备契约返回最近 5 个会话
-- 审批允许/拒绝的真实 Codex 写操作仍待单独验收
+- 真实读取到动态额度窗口、账户 Token 与会话数据，并按设备契约返回最近 5 个会话
+- Bridge 完整重启后已通过 `thread/read` 恢复最后一条 Codex 回复
+- `decline` 在 Codex 仅提供 `cancel` 时会安全映射为 `cancel`；设备端的
+  `accept` 不会自动升级成 `acceptForSession`
+- 旧的音频转写 Approval 已清空，重启后待审批数为 0
 
 ## 安全与可靠性
 
@@ -306,19 +345,54 @@ bridge/target/vela-dial-bridge-0.1.0-SNAPSHOT.jar
 
 ## 当前边界
 
-- 实机固件已经完成直接 Wi-Fi、Java Bridge、录音上传与新建 Codex 会话联调；
-  火山引擎模式和审批允许/拒绝仍待使用新密钥做端到端验收。
+- 实机固件已经完成直接 Wi-Fi、Java Bridge、火山识别、录音上传、新建 Codex
+  会话和回复回显联调；业务操作产生的真实允许/拒绝仍建议另做一轮专项验收。
 - Bridge 能可靠处理由该 Bridge 发起或恢复后产生的 Codex Turn 审批；另一个
   Codex 客户端连接中已经悬起的审批，不保证会转发到本 Bridge。
-- 当前 CJK 字库覆盖 GB2312 常用简体字、ASCII 与常用标点；生僻字和 emoji
-  仍会回退为缺字符号。字体来自 Noto Sans CJK SC，OFL 许可见
-  `LICENSES/NotoSansCJK-OFL.txt`。
+- 当前固件内置 Noto Sans CJK SC 16px、2 bpp 的压缩常用字库，覆盖 GB2312
+  常用简体字、ASCII 与常用标点；LVGL 已开启
+  `LV_USE_FONT_COMPRESSED=1`。生僻字、繁体扩展字和 emoji 仍会回退为缺字符号，
+  OFL 许可见 `LICENSES/NotoSansCJK-OFL.txt`。
 - 当前 WAV 上传路径单句上限为 30 秒；长时间语音应使用计划中的
   ESP32 → Java Bridge → 火山引擎 WebSocket 流式路径。
 - 当前只做编程 AI，没有加入英语、天气、番茄钟和设置应用。
 - `open-vibe-island` 用于理解产品状态机和事件优先级；本项目没有复制其 GPL
   源码，是独立实现。第三方源码声明见
   [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+
+## 中文与用量实现依据
+
+### 中文显示
+
+当前版本采用“离线基础字库”方案：`src/vela_cjk_16.c` 保证设备断网时仍能显示
+常用中文。UI 只在检测到 CJK 码点时选择该字体，LVGL 的箭头、勾选等系统图标
+仍使用原字体，避免把图标误判成中文后显示方块。它适合当前 Demo，但不应把完整
+Unicode 字库全部塞进 ESP32 Flash。
+
+商业版建议参考 `xiaozhi-esp32` 的成熟做法：
+
+1. 保留当前压缩常用字库作为离线兜底。
+2. Java Bridge 按 Unicode 码点下发缺失字形位图。
+3. 固件通过 LVGL font fallback 接入动态字形，并在 PSRAM 中维护 LRU 缓存。
+4. 建议缓存 128–256 个字形，预算约 32–64 KiB；缓存未命中也不影响基础界面。
+
+相关实现：
+
+- [xiaozhi-esp32 动态字形缓存](https://github.com/78/xiaozhi-esp32/blob/5540258abcbfa62518d09959308200be1c5b1b2b/main/display/lvgl_display/dynamic_glyph_cache.h#L11-L19)
+- [LVGL fallback 接入](https://github.com/78/xiaozhi-esp32/blob/5540258abcbfa62518d09959308200be1c5b1b2b/main/display/lvgl_display/lvgl_display.cc#L78-L103)
+- [PSRAM 字形分配](https://github.com/78/xiaozhi-esp32/blob/5540258abcbfa62518d09959308200be1c5b1b2b/main/display/text_glyph.h#L25-L40)
+- [字形载荷校验](https://github.com/78/xiaozhi-esp32/blob/5540258abcbfa62518d09959308200be1c5b1b2b/main/protocols/text_glyph_payload.cc#L14-L63)
+- [LVGL 字体转换器](https://github.com/lvgl/lv_font_conv)
+
+### 额度与 Token
+
+- [Codex app-server 官方协议](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+  定义了 `account/rateLimits/read`、`account/rateLimits/updated` 与
+  `account/usage/read`。
+- [`open-vibe-island` 的 CodexUsage](https://github.com/Octane0411/open-vibe-island/blob/6e5e7a6a5b5097ee627a7d4dea6226c128747a71/Sources/OpenIslandCore/CodexUsage.swift)
+  同样按 `primary / secondary` 和实际分钟数动态解析额度窗口；其生产 UI 当前
+  不提供账户 Token 页。本项目复用的是这一产品思路，不复制源码，并补上官方
+  Token 与单会话上下文数据。
 
 ## 工程结构
 

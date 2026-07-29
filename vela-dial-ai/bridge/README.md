@@ -16,11 +16,14 @@ app-server 的 stdio JSONL 协议。
 
 - `initialize`
 - `account/rateLimits/read`
+- `account/rateLimits/updated`
+- `account/usage/read`
 - `thread/list`
 - `thread/start`
 - `thread/resume`
 - `turn/start`
 - `turn/steer`
+- `thread/tokenUsage/updated`
 - `item/commandExecution/requestApproval`
 - `item/fileChange/requestApproval`
 - thread / turn / item notifications
@@ -38,6 +41,16 @@ cd vela-dial-ai/bridge
 export VELA_BRIDGE_TOKEN='请替换成至少 32 字节的随机值'
 ./mvnw spring-boot:run
 ```
+
+本机开发也可以使用 Spring Boot 原生外部配置。复制示例后填写本机值：
+
+```sh
+cp config/application.example.yml config/application.yml
+```
+
+`config/application.yml` 会在从 `bridge/` 目录启动时自动覆盖打包内的安全默认值，
+并已被项目 `.gitignore` 排除。火山引擎 API Key 只应写入这个本地文件，不应写入
+`src/main/resources/application.yml`、固件或提交到 Git。
 
 可用 [.env.example](./.env.example) 查看所有常用环境变量。它只是一份不含密钥的
 模板，Spring Boot 不会自动加载；请按需复制其中的值到终端环境或 Cursor 的运行配置。
@@ -78,14 +91,39 @@ Authorization: Bearer ...
 {
   "revision": 9,
   "quota": {
+    "windows": [
+      {
+        "valid": true,
+        "key": "primary",
+        "label": "7D",
+        "window_minutes": 10080,
+        "used_percent": 57,
+        "remaining_percent": 43,
+        "reset_label": "2天后"
+      }
+    ],
+    "tokens": {
+      "valid": true,
+      "lifetime_tokens": 123456,
+      "latest_day_tokens": 1234,
+      "latest_day_label": "2026-07-30",
+      "peak_daily_tokens": 5678,
+      "current_streak_days": 3
+    },
     "five_hour": {
       "valid": false,
+      "key": "primary",
+      "label": "5H",
+      "window_minutes": 300,
       "used_percent": null,
       "remaining_percent": null,
       "reset_label": null
     },
     "seven_day": {
       "valid": true,
+      "key": "primary",
+      "label": "7D",
+      "window_minutes": 10080,
       "used_percent": 57,
       "remaining_percent": 43,
       "reset_label": "2天后"
@@ -98,6 +136,10 @@ Authorization: Bearer ...
       "title": "Build firmware",
       "summary": "正在编译",
       "state": "waiting_approval",
+      "total_tokens": 48000,
+      "last_tokens": 9200,
+      "context_window_tokens": 200000,
+      "context_used_percent": 4,
       "needs_feedback": false,
       "approval": {
         "present": true,
@@ -128,14 +170,49 @@ Authorization: Bearer ...
 
 注意：
 
-- 额度按官方 `windowDurationMins` 映射：`300` 为 5H，`10080` 为 7D。
-- app-server 没返回的窗口保持 `valid=false`，绝不会伪造成使用率 0。
+- `quota.windows` 是当前权威字段。Bridge 按官方 `windowDurationMins` 动态生成
+  标签并返回实际存在的窗口，不假设账户一定同时拥有 `5H / 7D`；当前账户可能
+  只返回一个 `7D`。
+- `five_hour / seven_day` 仅为旧固件兼容别名。app-server 没返回的兼容窗口保持
+  `valid=false`，绝不会伪造成使用率 0，也不会在新 UI 中占据一个空白页面。
+- 固件默认选中 `used_percent` 最高、压力最大的实际窗口；旋钮在实际窗口与
+  `TOKEN` 页之间切换，右滑才进入会话列表。
+- `quota.tokens` 来自官方 `account/usage/read`，是账户活动统计，不等同于
+  `account/rateLimits/read` 的额度百分比。
+- 会话 Token 来自 `thread/tokenUsage/updated`。上下文占用按
+  `(last.totalTokens - last.reasoningOutputTokens) / modelContextWindow`
+  计算，不使用线程累计 Token 除以上下文窗口。
 - 设备最多收到 5 个会话；待审批和需要补充拒绝理由的会话优先，不会因为
   排名较旧而消失。
 - 审批使用全局 FIFO，`current_approval` 是队首，
   `pending_approval_count` 是尚未提交的总数。
 - 拒绝后会持久化 `needs_feedback`。即使录音失败或 Bridge 重启，设备仍能用
   session 的 `approval.approval_id` 再次发送理由。
+
+额度窗口的动态解析思路与
+[`open-vibe-island` 的 `CodexUsage`](https://github.com/Octane0411/open-vibe-island/blob/6e5e7a6a5b5097ee627a7d4dea6226c128747a71/Sources/OpenIslandCore/CodexUsage.swift)
+一致：读取 `primary / secondary` 的实际分钟数，而不是把产品文案当成协议。
+`open-vibe-island` 的生产 UI 当前没有账户 Token 页；本 Bridge 通过
+[Codex app-server 官方接口](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+补充 `account/usage/read` 和单会话上下文通知。
+
+## 中文字形职责
+
+当前中文由固件内置的 Noto Sans CJK SC 16px、2 bpp 压缩常用字库负责，
+`LV_USE_FONT_COMPRESSED=1` 必须保持开启。它覆盖 GB2312 常用简体字、ASCII
+与常用标点，不能保证生僻字、繁体扩展字和 emoji。
+
+商业版不会让 Bridge 下发完整字体文件，而是参考 `xiaozhi-esp32`：
+
+- Bridge 按 Unicode 码点返回缺失字形位图与度量信息；
+- 固件把它接入 LVGL font fallback；
+- 字形使用 PSRAM LRU 缓存，基础压缩字库继续承担离线兜底。
+
+参考：
+
+- [动态字形缓存](https://github.com/78/xiaozhi-esp32/blob/5540258abcbfa62518d09959308200be1c5b1b2b/main/display/lvgl_display/dynamic_glyph_cache.h#L11-L19)
+- [LVGL fallback 接入](https://github.com/78/xiaozhi-esp32/blob/5540258abcbfa62518d09959308200be1c5b1b2b/main/display/lvgl_display/lvgl_display.cc#L78-L103)
+- [字形载荷校验](https://github.com/78/xiaozhi-esp32/blob/5540258abcbfa62518d09959308200be1c5b1b2b/main/protocols/text_glyph_payload.cc#L14-L63)
 
 ### 上传 WAV
 
@@ -283,7 +360,8 @@ export VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo
 测试覆盖：
 
 - Spring 应用上下文和生产组件装配
-- 额度缺失窗口和 sparse update
+- 动态额度窗口、缺失窗口和 sparse update
+- 账户 Token 与单会话上下文占用
 - 20 个会话中旧会话审批仍进入设备前 5
 - 同 thread / item 的多个审批不会覆盖
 - Codex RequestId 的 string / integer 类型保留

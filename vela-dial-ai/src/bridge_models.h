@@ -16,6 +16,7 @@ constexpr size_t VELA_OPERATION_ID_BYTES = 64;
 constexpr size_t VELA_RECORDING_PATH_BYTES = 64;
 constexpr size_t VELA_ERROR_TEXT_BYTES = 128;
 constexpr size_t VELA_MAX_BRIDGE_SESSIONS = 5;
+constexpr size_t VELA_MAX_QUOTA_WINDOWS = 2;
 
 enum class ConnectivityPhase : uint8_t {
     Uninitialized,
@@ -81,9 +82,21 @@ struct ConnectivitySnapshot {
 struct BridgeQuotaWindow {
     // A missing quota window is unknown, not zero usage.
     bool valid;
+    uint32_t window_minutes;
     uint8_t used_percent;
     uint8_t remaining_percent;
+    char key[12];
+    char label[16];
     char reset_label[40];
+};
+
+struct BridgeAccountTokens {
+    bool valid;
+    uint64_t lifetime_tokens;
+    uint64_t latest_day_tokens;
+    uint64_t peak_daily_tokens;
+    uint16_t current_streak_days;
+    char latest_day_label[16];
 };
 
 struct BridgeApproval {
@@ -104,6 +117,11 @@ struct BridgeSession {
     char title[48];
     char summary[112];
     BridgeSessionState state;
+    uint64_t total_tokens;
+    uint64_t last_tokens;
+    uint64_t context_window_tokens;
+    uint8_t context_used_percent;
+    bool context_usage_valid;
     bool needs_feedback;
     BridgeApproval approval;
 };
@@ -128,6 +146,10 @@ struct BridgeSnapshot {
     bool bridge_online;
     int16_t last_http_status;
     char bridge_error[VELA_ERROR_TEXT_BYTES];
+    uint8_t quota_window_count;
+    BridgeQuotaWindow quota_windows[VELA_MAX_QUOTA_WINDOWS];
+    BridgeAccountTokens account_tokens;
+    // Legacy aliases retained while older Bridge responses are still in use.
     BridgeQuotaWindow quota_5h;
     BridgeQuotaWindow quota_7d;
     uint16_t total_session_count;

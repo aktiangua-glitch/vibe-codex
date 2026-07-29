@@ -22,12 +22,41 @@ public class CodexStateStore {
 
     public record QuotaWindow(
             boolean valid,
+            String key,
+            String label,
+            Long windowMinutes,
             Integer usedPercent,
             Integer remainingPercent,
             String resetLabel) {
 
-        static QuotaWindow unknown() {
-            return new QuotaWindow(false, null, null, null);
+        static QuotaWindow unknown(String key, String label, long windowMinutes) {
+            return new QuotaWindow(
+                    false,
+                    key,
+                    label,
+                    windowMinutes,
+                    null,
+                    null,
+                    null);
+        }
+    }
+
+    public record AccountTokenUsage(
+            boolean valid,
+            Long lifetimeTokens,
+            Long latestDayTokens,
+            String latestDayLabel,
+            Long peakDailyTokens,
+            Integer currentStreakDays) {
+
+        static AccountTokenUsage unknown() {
+            return new AccountTokenUsage(
+                    false,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
         }
     }
 
@@ -41,6 +70,10 @@ public class CodexStateStore {
             String currentTurnId,
             String lastItemType,
             String lastMessage,
+            Long totalTokens,
+            Long lastTokens,
+            Long contextWindowTokens,
+            Integer contextUsedPercent,
             long updatedAt,
             boolean pendingApproval,
             boolean needsFeedback) {
@@ -48,10 +81,15 @@ public class CodexStateStore {
 
     public record StateSnapshot(
             long revision,
-            QuotaWindow quota5h,
-            QuotaWindow quota7d,
+            List<QuotaWindow> quotaWindows,
+            AccountTokenUsage tokenUsage,
             int totalSessionCount,
             List<SessionSnapshot> sessions) {
+    }
+
+    public record ThreadHydrationCandidate(
+            String id,
+            long updatedAt) {
     }
 
     private static final long FIVE_HOURS_MINUTES = 300;
@@ -61,6 +99,7 @@ public class CodexStateStore {
     private final Map<String, MutableSession> sessions = new LinkedHashMap<>();
     private final AtomicLong revision = new AtomicLong();
     private JsonNode rateLimits = NullNode.getInstance();
+    private JsonNode accountUsage = NullNode.getInstance();
 
     public synchronized void mergeThreadList(JsonNode result) {
         JsonNode data = result.path("data");
@@ -73,10 +112,36 @@ public class CodexStateStore {
         revision.incrementAndGet();
     }
 
+    public synchronized void mergeThreadRead(JsonNode result) {
+        JsonNode thread = result.path("thread");
+        if (!thread.isObject()) {
+            return;
+        }
+        upsertThread(thread);
+
+        MutableSession current = sessions.get(nullableText(thread, "id"));
+        JsonNode agentMessage = latestAgentMessage(thread.path("turns"));
+        if (current != null && agentMessage != null) {
+            String message = summarizeItem(agentMessage);
+            if (message != null && !message.isBlank()) {
+                current.lastItemType = "agentMessage";
+                current.lastMessage = message;
+            }
+        }
+        revision.incrementAndGet();
+    }
+
     public synchronized void replaceRateLimits(JsonNode result) {
         JsonNode codexBucket = result.path("rateLimitsByLimitId").path("codex");
         JsonNode value = codexBucket.isObject() ? codexBucket : result.path("rateLimits");
         this.rateLimits = value.isMissingNode() ? NullNode.getInstance() : value.deepCopy();
+        revision.incrementAndGet();
+    }
+
+    public synchronized void replaceAccountUsage(JsonNode result) {
+        accountUsage = result == null || result.isMissingNode()
+                ? NullNode.getInstance()
+                : result.deepCopy();
         revision.incrementAndGet();
     }
 
@@ -127,6 +192,25 @@ public class CodexStateStore {
                     rateLimits = sparseMerge(rateLimits, value);
                 }
             }
+            case "thread/tokenUsage/updated" -> {
+                MutableSession session = session(params.path("threadId").asText());
+                JsonNode usage = params.path("tokenUsage");
+                JsonNode total = usage.path("total");
+                JsonNode last = usage.path("last");
+                session.totalTokens = nullableLong(total, "totalTokens");
+                session.lastTokens = nullableLong(last, "totalTokens");
+                Long reasoningTokens = nullableLong(last, "reasoningOutputTokens");
+                session.contextUsedTokens = session.lastTokens == null
+                        ? null
+                        : Math.max(
+                                0,
+                                session.lastTokens - (reasoningTokens == null ? 0 : reasoningTokens));
+                session.contextWindowTokens = nullableLong(usage, "modelContextWindow");
+                session.contextUsedPercent = contextPercent(
+                        session.contextUsedTokens,
+                        session.contextWindowTokens);
+                session.updatedAt = Instant.now().getEpochSecond();
+            }
             default -> {
                 // Other thread/turn/item deltas are deliberately ignored by the compact device model.
             }
@@ -139,27 +223,12 @@ public class CodexStateStore {
             List<String> feedbackThreadIds) {
         Set<String> pendingSet = new LinkedHashSet<>(pendingThreadIds);
         Set<String> feedbackSet = new LinkedHashSet<>(feedbackThreadIds);
-        Set<String> prioritySet = new LinkedHashSet<>(pendingSet);
-        prioritySet.addAll(feedbackSet);
-        List<MutableSession> selected = new ArrayList<>();
-
-        for (String threadId : prioritySet) {
-            MutableSession session = sessions.get(threadId);
-            if (session != null && selected.size() < DEVICE_SESSION_LIMIT) {
-                selected.add(session);
-            }
-        }
-
-        sessions.values().stream()
-                .sorted(Comparator.comparingLong((MutableSession value) -> value.updatedAt).reversed())
-                .filter(value -> !containsSession(selected, value.id))
-                .limit(DEVICE_SESSION_LIMIT - selected.size())
-                .forEach(selected::add);
+        List<MutableSession> selected = selectDeviceSessions(pendingThreadIds, feedbackThreadIds);
 
         return new StateSnapshot(
                 revision.get(),
-                quotaForDuration(FIVE_HOURS_MINUTES),
-                quotaForDuration(SEVEN_DAYS_MINUTES),
+                quotaWindows(),
+                accountTokenUsage(),
                 sessions.size(),
                 selected.stream().map(value -> value.snapshot(
                         pendingSet.contains(value.id),
@@ -174,6 +243,14 @@ public class CodexStateStore {
     public synchronized Optional<SessionSnapshot> findSession(String threadId) {
         MutableSession session = sessions.get(threadId);
         return session == null ? Optional.empty() : Optional.of(session.snapshot(false, false));
+    }
+
+    public synchronized List<ThreadHydrationCandidate> hydrationCandidates(
+            List<String> pendingThreadIds,
+            List<String> feedbackThreadIds) {
+        return selectDeviceSessions(pendingThreadIds, feedbackThreadIds).stream()
+                .map(value -> new ThreadHydrationCandidate(value.id, value.updatedAt))
+                .toList();
     }
 
     private void upsertThread(JsonNode thread) {
@@ -204,21 +281,91 @@ public class CodexStateStore {
         return sessions.computeIfAbsent(id, MutableSession::new);
     }
 
-    private QuotaWindow quotaForDuration(long durationMinutes) {
-        for (JsonNode candidate : quotaCandidates(rateLimits)) {
-            if (candidate.path("windowDurationMins").asLong(-1) == durationMinutes) {
-                int used = clamp(candidate.path("usedPercent").asInt(0), 0, 100);
-                Long resetsAt = candidate.path("resetsAt").isIntegralNumber()
-                        ? candidate.path("resetsAt").asLong()
-                        : null;
-                return new QuotaWindow(true, used, 100 - used, resetLabel(resetsAt));
-            }
-        }
-        return QuotaWindow.unknown();
+    public static QuotaWindow findWindow(
+            List<QuotaWindow> windows,
+            long durationMinutes) {
+        return windows.stream()
+                .filter(window -> window.windowMinutes() != null
+                        && window.windowMinutes() == durationMinutes)
+                .findFirst()
+                .orElseGet(() -> QuotaWindow.unknown(
+                        durationMinutes == FIVE_HOURS_MINUTES ? "primary" : "secondary",
+                        windowLabel(durationMinutes),
+                        durationMinutes));
     }
 
-    private static Collection<JsonNode> quotaCandidates(JsonNode rateLimits) {
-        List<JsonNode> candidates = new ArrayList<>();
+    private List<QuotaWindow> quotaWindows() {
+        Map<Long, QuotaWindow> windows = new LinkedHashMap<>();
+        for (QuotaCandidate candidate : quotaCandidates(rateLimits)) {
+            JsonNode value = candidate.value();
+            long duration = value.path("windowDurationMins").asLong(-1);
+            if (duration <= 0 || windows.containsKey(duration)) {
+                continue;
+            }
+            int used = clamp(value.path("usedPercent").asInt(0), 0, 100);
+            Long resetsAt = value.path("resetsAt").isIntegralNumber()
+                    ? value.path("resetsAt").asLong()
+                    : null;
+            windows.put(
+                    duration,
+                    new QuotaWindow(
+                            true,
+                            candidate.key(),
+                            windowLabel(duration),
+                            duration,
+                            used,
+                            100 - used,
+                            resetLabel(resetsAt)));
+        }
+        return windows.values().stream()
+                .sorted(Comparator.comparingLong(QuotaWindow::windowMinutes))
+                .limit(2)
+                .toList();
+    }
+
+    private AccountTokenUsage accountTokenUsage() {
+        JsonNode summary = accountUsage.path("summary");
+        JsonNode buckets = accountUsage.path("dailyUsageBuckets");
+        JsonNode latest = null;
+        if (buckets.isArray()) {
+            for (JsonNode bucket : buckets) {
+                if (!bucket.isObject()) {
+                    continue;
+                }
+                String date = nullableText(bucket, "startDate");
+                String latestDate = latest == null
+                        ? null
+                        : nullableText(latest, "startDate");
+                if (latest == null
+                        || (date != null
+                        && (latestDate == null || date.compareTo(latestDate) > 0))) {
+                    latest = bucket;
+                }
+            }
+        }
+
+        Long lifetime = nullableLong(summary, "lifetimeTokens");
+        Long peak = nullableLong(summary, "peakDailyTokens");
+        Long latestTokens = latest == null ? null : nullableLong(latest, "tokens");
+        String latestDate = latest == null ? null : nullableText(latest, "startDate");
+        Long streak = nullableLong(summary, "currentStreakDays");
+        boolean valid = lifetime != null || peak != null || latestTokens != null;
+        return valid
+                ? new AccountTokenUsage(
+                        true,
+                        lifetime,
+                        latestTokens,
+                        latestDate,
+                        peak,
+                        streak == null ? null : clampLongToInt(streak))
+                : AccountTokenUsage.unknown();
+    }
+
+    private record QuotaCandidate(String key, JsonNode value) {
+    }
+
+    private static Collection<QuotaCandidate> quotaCandidates(JsonNode rateLimits) {
+        List<QuotaCandidate> candidates = new ArrayList<>();
         addWindows(candidates, rateLimits);
         if (rateLimits.isObject()) {
             rateLimits.properties().forEach(entry -> {
@@ -231,15 +378,35 @@ public class CodexStateStore {
         return candidates;
     }
 
-    private static void addWindows(List<JsonNode> target, JsonNode source) {
+    private static void addWindows(List<QuotaCandidate> target, JsonNode source) {
         JsonNode primary = source.path("primary");
         JsonNode secondary = source.path("secondary");
         if (primary.isObject()) {
-            target.add(primary);
+            target.add(new QuotaCandidate("primary", primary));
         }
         if (secondary.isObject()) {
-            target.add(secondary);
+            target.add(new QuotaCandidate("secondary", secondary));
         }
+    }
+
+    private static String windowLabel(long minutes) {
+        long days = minutes / 1_440;
+        long remainingAfterDays = minutes % 1_440;
+        long hours = remainingAfterDays / 60;
+        long remainingMinutes = remainingAfterDays % 60;
+        if (days > 0 && hours == 0 && remainingMinutes == 0) {
+            return days + "D";
+        }
+        if (days > 0 && remainingMinutes == 0) {
+            return days + "D " + hours + "H";
+        }
+        if (hours > 0 && remainingMinutes == 0) {
+            return hours + "H";
+        }
+        if (hours > 0) {
+            return hours + "H " + remainingMinutes + "M";
+        }
+        return minutes + "M";
     }
 
     private static JsonNode sparseMerge(JsonNode current, JsonNode patch) {
@@ -281,8 +448,65 @@ public class CodexStateStore {
         return Math.max(min, Math.min(max, value));
     }
 
+    private static int clampLongToInt(long value) {
+        return value > Integer.MAX_VALUE
+                ? Integer.MAX_VALUE
+                : (int) Math.max(0, value);
+    }
+
+    private static Integer contextPercent(Long usedTokens, Long contextWindowTokens) {
+        if (usedTokens == null || contextWindowTokens == null || contextWindowTokens <= 0) {
+            return null;
+        }
+        return clamp(
+                (int) Math.round(usedTokens * 100.0 / contextWindowTokens),
+                0,
+                100);
+    }
+
     private static boolean containsSession(List<MutableSession> values, String id) {
         return values.stream().anyMatch(value -> value.id.equals(id));
+    }
+
+    private List<MutableSession> selectDeviceSessions(
+            List<String> pendingThreadIds,
+            List<String> feedbackThreadIds) {
+        Set<String> prioritySet = new LinkedHashSet<>(pendingThreadIds);
+        prioritySet.addAll(feedbackThreadIds);
+        List<MutableSession> selected = new ArrayList<>();
+
+        for (String threadId : prioritySet) {
+            MutableSession session = sessions.get(threadId);
+            if (session != null && selected.size() < DEVICE_SESSION_LIMIT) {
+                selected.add(session);
+            }
+        }
+
+        sessions.values().stream()
+                .sorted(Comparator.comparingLong((MutableSession value) -> value.updatedAt).reversed())
+                .filter(value -> !containsSession(selected, value.id))
+                .limit(DEVICE_SESSION_LIMIT - selected.size())
+                .forEach(selected::add);
+        return selected;
+    }
+
+    private static JsonNode latestAgentMessage(JsonNode turns) {
+        if (!turns.isArray()) {
+            return null;
+        }
+        for (int turnIndex = turns.size() - 1; turnIndex >= 0; turnIndex--) {
+            JsonNode items = turns.get(turnIndex).path("items");
+            if (!items.isArray()) {
+                continue;
+            }
+            for (int itemIndex = items.size() - 1; itemIndex >= 0; itemIndex--) {
+                JsonNode item = items.get(itemIndex);
+                if ("agentMessage".equals(nullableText(item, "type"))) {
+                    return item;
+                }
+            }
+        }
+        return null;
     }
 
     private static String summarizeItem(JsonNode item) {
@@ -314,12 +538,19 @@ public class CodexStateStore {
         if (value == null || value.length() <= maxLength) {
             return value;
         }
-        return value.substring(0, maxLength - 1) + "…";
+        return value.substring(0, maxLength - 3) + "...";
     }
 
     private static String nullableText(JsonNode node, String field) {
         JsonNode value = node.path(field);
         return value.isTextual() ? value.asText() : null;
+    }
+
+    private static Long nullableLong(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        return value.isIntegralNumber() && value.asLong() >= 0
+                ? value.asLong()
+                : null;
     }
 
     private static final class MutableSession {
@@ -332,6 +563,11 @@ public class CodexStateStore {
         private String currentTurnId;
         private String lastItemType;
         private String lastMessage;
+        private Long totalTokens;
+        private Long lastTokens;
+        private Long contextUsedTokens;
+        private Long contextWindowTokens;
+        private Integer contextUsedPercent;
         private long updatedAt = Instant.now().getEpochSecond();
 
         private MutableSession(String id) {
@@ -373,6 +609,10 @@ public class CodexStateStore {
                     currentTurnId,
                     lastItemType,
                     lastMessage,
+                    totalTokens,
+                    lastTokens,
+                    contextWindowTokens,
+                    contextUsedPercent,
                     updatedAt,
                     pendingApproval,
                     needsFeedback);

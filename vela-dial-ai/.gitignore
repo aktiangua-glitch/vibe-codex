@@ -18,6 +18,7 @@ bridge/.settings/
 # Local runtime data and secrets
 bridge/data/
 bridge/runtime/
+bridge/config/application.yml
 .env
 .env.*
 !.env.example

@@ -29,6 +29,7 @@ public class VolcengineAsrClient {
     }
 
     private static final String SUCCESS_STATUS = "20000000";
+    private static final String SILENT_AUDIO_STATUS = "20000003";
 
     private final BridgeProperties properties;
     private final JsonMapper jsonMapper;
@@ -110,6 +111,12 @@ public class VolcengineAsrClient {
 
         String apiStatus = response.headers().firstValue("X-Api-Status-Code").orElse("");
         String logId = response.headers().firstValue("X-Tt-Logid").orElse(null);
+        if (SILENT_AUDIO_STATUS.equals(apiStatus)) {
+            throw new BridgeApiException(
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "speech_not_recognized",
+                    "没有听到说话，请重试");
+        }
         if (response.statusCode() / 100 != 2
                 || (!apiStatus.isBlank() && !SUCCESS_STATUS.equals(apiStatus))) {
             String message = response.headers().firstValue("X-Api-Message")

@@ -22,12 +22,15 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -67,7 +70,14 @@ public class CodexAppServerClient implements AutoCloseable {
             Instant resolvedAt) {
     }
 
+    private record ThreadHydrationStamp(
+            long updatedAt,
+            long retryAfterEpochMillis,
+            boolean hydrated) {
+    }
+
     private static final Logger log = LoggerFactory.getLogger(CodexAppServerClient.class);
+    private static final Duration THREAD_HYDRATION_RETRY_DELAY = Duration.ofMinutes(1);
 
     private final BridgeProperties properties;
     private final JsonMapper jsonMapper;
@@ -79,6 +89,9 @@ public class CodexAppServerClient implements AutoCloseable {
             new ConcurrentHashMap<>();
     private final Object writerLock = new Object();
     private final AtomicBoolean processStarting = new AtomicBoolean();
+    private final AtomicBoolean threadRefreshInFlight = new AtomicBoolean();
+    private final ConcurrentHashMap<String, ThreadHydrationStamp> threadHydrations =
+            new ConcurrentHashMap<>();
     private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
             runnable -> Thread.ofPlatform()
@@ -146,6 +159,13 @@ public class CodexAppServerClient implements AutoCloseable {
         });
     }
 
+    public CompletableFuture<JsonNode> readAccountUsage() {
+        return request("account/usage/read", null).thenApply(result -> {
+            stateStore.replaceAccountUsage(result);
+            return result;
+        });
+    }
+
     public CompletableFuture<JsonNode> listThreads(int limit, String cursor) {
         ObjectNode params = jsonMapper.createObjectNode();
         params.put("limit", limit);
@@ -155,6 +175,13 @@ public class CodexAppServerClient implements AutoCloseable {
             params.put("cursor", cursor);
         }
         return request("thread/list", params);
+    }
+
+    public CompletableFuture<JsonNode> readThread(String threadId) {
+        ObjectNode params = jsonMapper.createObjectNode();
+        params.put("threadId", requireNonBlank(threadId, "threadId"));
+        params.put("includeTurns", true);
+        return request("thread/read", params);
     }
 
     public CompletableFuture<JsonNode> startThread(String cwd) {
@@ -256,7 +283,7 @@ public class CodexAppServerClient implements AutoCloseable {
         ObjectNode response = jsonMapper.createObjectNode();
         response.set("id", attempt.approval().codexRequestId());
         ObjectNode result = response.putObject("result");
-        result.put("decision", attempt.decision());
+        result.put("decision", attempt.wireDecision());
 
         boolean feedbackPersisted = false;
         try {
@@ -508,13 +535,18 @@ public class CodexAppServerClient implements AutoCloseable {
     }
 
     private void refreshThreadsSafely() {
-        if (connectionState != ConnectionState.CONNECTED) {
+        if (connectionState != ConnectionState.CONNECTED
+                || !threadRefreshInFlight.compareAndSet(false, true)) {
             return;
         }
-        fetchThreadPage(null, 0).exceptionally(exception -> {
-            log.debug("Unable to refresh Codex threads: {}", safeMessage(exception));
-            return null;
-        });
+        fetchThreadPage(null, 0)
+                .thenCompose(ignored -> hydrateDeviceThreads())
+                .whenComplete((ignored, exception) -> {
+                    threadRefreshInFlight.set(false);
+                    if (exception != null) {
+                        log.debug("Unable to refresh Codex threads: {}", safeMessage(exception));
+                    }
+                });
     }
 
     private CompletableFuture<Void> fetchThreadPage(String cursor, int page) {
@@ -531,12 +563,60 @@ public class CodexAppServerClient implements AutoCloseable {
         });
     }
 
+    private CompletableFuture<Void> hydrateDeviceThreads() {
+        List<CodexStateStore.ThreadHydrationCandidate> candidates =
+                stateStore.hydrationCandidates(
+                        approvalRegistry.pendingThreadIds(),
+                        feedbackRegistry.threadIdsNeedingFeedback());
+        Set<String> candidateIds = new HashSet<>();
+        candidates.forEach(candidate -> candidateIds.add(candidate.id()));
+        threadHydrations.keySet().removeIf(threadId -> !candidateIds.contains(threadId));
+
+        long now = System.currentTimeMillis();
+        List<CompletableFuture<Void>> reads = new ArrayList<>();
+        for (CodexStateStore.ThreadHydrationCandidate candidate : candidates) {
+            ThreadHydrationStamp previous = threadHydrations.get(candidate.id());
+            if (previous != null
+                    && previous.updatedAt() == candidate.updatedAt()
+                    && (previous.hydrated() || now < previous.retryAfterEpochMillis())) {
+                continue;
+            }
+
+            ThreadHydrationStamp attempted = new ThreadHydrationStamp(
+                    candidate.updatedAt(),
+                    now + THREAD_HYDRATION_RETRY_DELAY.toMillis(),
+                    false);
+            threadHydrations.put(candidate.id(), attempted);
+            CompletableFuture<Void> read = readThread(candidate.id())
+                    .thenAccept(result -> {
+                        stateStore.mergeThreadRead(result);
+                        threadHydrations.replace(
+                                candidate.id(),
+                                attempted,
+                                new ThreadHydrationStamp(candidate.updatedAt(), Long.MAX_VALUE, true));
+                    })
+                    .exceptionally(exception -> {
+                        log.debug(
+                                "Unable to hydrate Codex thread {}: {}",
+                                candidate.id(),
+                                safeMessage(exception));
+                        return null;
+                    });
+            reads.add(read);
+        }
+        return CompletableFuture.allOf(reads.toArray(CompletableFuture[]::new));
+    }
+
     private void refreshRateLimitsSafely() {
         if (connectionState != ConnectionState.CONNECTED) {
             return;
         }
         readRateLimits().exceptionally(exception -> {
             log.debug("Unable to refresh Codex rate limits: {}", safeMessage(exception));
+            return null;
+        });
+        readAccountUsage().exceptionally(exception -> {
+            log.debug("Unable to refresh Codex token usage: {}", safeMessage(exception));
             return null;
         });
     }

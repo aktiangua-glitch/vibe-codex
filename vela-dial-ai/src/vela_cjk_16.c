@@ -4,7 +4,7 @@
  * Coverage: ASCII, CJK punctuation, full-width forms and GB2312 Han characters
  * Size: 16 px, 2 bpp, compressed, no kerning
  *
- * See licenses/NotoSansCJK-OFL.txt.
+ * See LICENSES/NotoSansCJK-OFL.txt.
  *******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
