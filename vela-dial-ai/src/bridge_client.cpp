@@ -13,6 +13,7 @@
 #include "connectivity_service.h"
 #include "device_config.h"
 #include "recording_store.h"
+#include "text_utils.h"
 
 namespace {
 
@@ -45,10 +46,7 @@ String s_snapshot_etag;
 
 void copy_text(char *destination, size_t capacity, const char *source)
 {
-    if (destination == nullptr || capacity == 0) {
-        return;
-    }
-    snprintf(destination, capacity, "%s", source == nullptr ? "" : source);
+    vela_copy_utf8(destination, capacity, source);
 }
 
 bool copy_checked(

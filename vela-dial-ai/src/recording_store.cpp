@@ -154,7 +154,14 @@ bool load_stored_pending(StoredPendingUpload *pending)
         return false;
     }
     Preferences preferences;
-    if (!preferences.begin(kPendingNamespace, true)) {
+    // A fresh device has no pending-upload namespace yet. Let Preferences
+    // create an empty namespace once instead of emitting NOT_FOUND on every
+    // retry poll.
+    if (!preferences.begin(kPendingNamespace, false)) {
+        return false;
+    }
+    if (!preferences.isKey(kPendingKey)) {
+        preferences.end();
         return false;
     }
     if (preferences.getBytesLength(kPendingKey) !=

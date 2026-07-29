@@ -8,7 +8,7 @@ Codex。
 
 - 可烧录的 ESP32 固件
 - 可直接启动的 Java Bridge
-- Wi-Fi AP 首次配网
+- 编译期私有 Wi-Fi 配置与开放 AP 兜底配网
 - 真实 Codex 额度与会话
 - 新会话语音输入
 - 旋钮审批与拒绝理由语音回传
@@ -41,6 +41,9 @@ Wi-Fi 配网、Bridge、真实语音识别和 Codex 写操作仍需继续做端�
 TF 卡 WAV → Java Bridge → 火山引擎极速版 ASR → 文本 → Codex
 默认语音路径：
 TF 卡 WAV → Java Bridge → Codex localAudio
+
+计划中的长语音路径：
+ESP32 PCM 音频流 → Java Bridge → 火山引擎双向流式 ASR → 文本 → Codex
 ```
 
 ## 为什么 Java 没有直接引入 OpenAI SDK
@@ -162,10 +165,19 @@ java -jar target/vela-dial-bridge-0.1.0-SNAPSHOT.jar
 
 ### 2. 设备 AP 配网
 
-首次启动且没有已保存配置时，设备会进入安全 AP 模式。圆屏显示：
+自己的设备也可以使用零操作启动：复制
+`include/vela_secrets.example.h` 为 `include/vela_secrets.h`，填写家庭 Wi-Fi
+和本机 Bridge 信息后重新烧录。该文件已被 Git 忽略；设备首次启动会直接
+联网并进入 AI 页面，不显示配网界面。服务商 API Key 仍然只能配置在 Java
+Bridge 服务端，不能写入此文件。
+
+没有本机私有配置、已保存网络失效，或用户主动选择“重新配网”时，设备会
+自动进入下面的开放 AP 流程。
+
+首次启动且没有已保存配置时，设备会进入临时开放 AP 模式。圆屏显示：
 
 - `Vela-XXXXXX` AP 名称
-- 本次启动生成的 AP 密码
+- `OPEN - NO PASSWORD`
 - 配网页地址，通常是 `192.168.4.1`
 
 操作步骤：
@@ -178,8 +190,11 @@ java -jar target/vela-dial-bridge-0.1.0-SNAPSHOT.jar
 6. Bridge Token 填启动 Java Bridge 时使用的同一个 Token。
 7. 保存后设备会关闭 AP，连接 Wi-Fi，再连接本机 Bridge。
 
-AP 密码只显示在圆屏，不打印到串口。Wi-Fi、Bridge 地址与 Token 使用带
-schema 和 CRC 的 Preferences 结构保存。
+手机无需密码即可连接，提交成功后设备会立即关闭临时 AP。已配网设备正常
+启动时不会开放 AP；只有首次使用、用户主动选择“重新配网”或清除配置后才
+重新开启。Wi-Fi、Bridge 地址与设备访问 Token 使用带 schema 和 CRC 的
+Preferences 结构保存；Codex、火山引擎等服务密钥始终只保存在 Java Bridge
+服务端，不进入 ESP32 或配网页。
 
 ### 3. 选择语音方案
 
@@ -198,6 +213,12 @@ export VOLCENGINE_ASR_RESOURCE_ID='volc.bigasr.auc_turbo'
 ```
 
 火山密钥只保存在 Mac 环境变量中，永远不下发设备。
+
+当前固件采用“先在 TF 卡生成完整 WAV，再上传 Bridge”的可靠路径，并设置
+30 秒单句安全上限。若要做长时间听写，不应继续放大 WAV、PSRAM 与 HTTP
+请求上限，而应改为持续发送 PCM 分片：ESP32 只连接局域网 Bridge，由 Java
+Bridge 维护火山引擎 WebSocket 和云端密钥。2 秒静音仍由设备侧 VAD 判定，
+触发结束当前语句并把最终文本发送给 Codex。
 
 ## 构建与烧录
 
@@ -251,18 +272,24 @@ bridge/target/vela-dial-bridge-0.1.0-SNAPSHOT.jar
 2026-07-29 至 2026-07-30 验证结果：
 
 - ESP32 固件完整构建成功
-- RAM：179,956 / 327,680 bytes（54.9%）
-- Flash：2,236,040 / 8,388,608 bytes（26.7%）
+- RAM：179,948 / 327,680 bytes（54.9%）
+- Flash：2,675,180 / 8,388,608 bytes（31.9%）
 - 实机自动识别到 16 MB Flash 与 8 MB PSRAM
 - 屏幕、触摸、旋钮、TF 卡、麦克风、扬声器、灯环与 DRV2605L 初始化通过
 - 修复首次 UI 同步的 `loopTask` 栈溢出，并为 Wi-Fi/音频保留内部 DMA 内存
+- 内置 Noto Sans CJK SC 16px Flash 字库，并使用 UTF-8 安全截断，中文会话
+  标题与摘要不再因缺字或半个字符截断而乱码
+- 新会话实机录音 3.88 秒，WAV 保存完整且丢帧为 0
+- 连续静音 2 秒自动结束录音、上传 Bridge，并成功创建 Codex Thread
+- 录音状态冲突改为等待上一条保存完成后自动开始，不再直接显示
+  `Recording unavailable`
 - 修复版烧录校验通过，串口连续观察未再出现 panic 或自动重启
 - Java 16 项测试全部通过，0 failure / 0 error
 - Spring 应用上下文启动测试通过
 - Java 21 可执行 JAR 启动成功
 - Bridge 成功连接当前 ChatGPT 内置 Codex app-server
 - 真实读取到非空额度与会话数据，并按设备契约返回最近 5 个会话
-- 本次真实联调只执行读取，没有创建会话、发送录音或处理审批
+- 审批允许/拒绝的真实 Codex 写操作仍待单独验收
 
 ## 安全与可靠性
 
@@ -279,12 +306,15 @@ bridge/target/vela-dial-bridge-0.1.0-SNAPSHOT.jar
 
 ## 当前边界
 
-- 实机固件已经烧录并稳定启动；Wi-Fi 配网页、Java Bridge、麦克风录音上传与
-  ASR/Codex 写操作仍待逐项做端到端验收。
+- 实机固件已经完成直接 Wi-Fi、Java Bridge、录音上传与新建 Codex 会话联调；
+  火山引擎模式和审批允许/拒绝仍待使用新密钥做端到端验收。
 - Bridge 能可靠处理由该 Bridge 发起或恢复后产生的 Codex Turn 审批；另一个
   Codex 客户端连接中已经悬起的审批，不保证会转发到本 Bridge。
-- 当前圆屏 v0 使用 Montserrat，系统文案为英文。动态中文会话标题可能缺字；
-  商业版本需要生成受控 CJK 字体子集。
+- 当前 CJK 字库覆盖 GB2312 常用简体字、ASCII 与常用标点；生僻字和 emoji
+  仍会回退为缺字符号。字体来自 Noto Sans CJK SC，OFL 许可见
+  `LICENSES/NotoSansCJK-OFL.txt`。
+- 当前 WAV 上传路径单句上限为 30 秒；长时间语音应使用计划中的
+  ESP32 → Java Bridge → 火山引擎 WebSocket 流式路径。
 - 当前只做编程 AI，没有加入英语、天气、番茄钟和设置应用。
 - `open-vibe-island` 用于理解产品状态机和事件优先级；本项目没有复制其 GPL
   源码，是独立实现。第三方源码声明见
@@ -300,6 +330,8 @@ vela-dial-ai/
 │   ├── connectivity_service.cpp   Wi-Fi、AP 与 captive portal
 │   ├── recording_store.cpp        TF 卡录音幂等与重试
 │   ├── board_hardware.cpp         屏幕、音频、灯环、TF 与振动
+│   ├── text_utils.h                UTF-8 安全截断
+│   ├── vela_cjk_16.c               Noto CJK LVGL Flash 字库
 │   └── main.cpp                   安全启动与任务初始化
 ├── bridge/
 │   ├── src/main/java/             Java Bridge
@@ -307,6 +339,7 @@ vela-dial-ai/
 │   ├── README.md                  Bridge API 与配置详解
 │   └── pom.xml
 ├── include/lv_conf.h
+├── LICENSES/NotoSansCJK-OFL.txt
 ├── partitions_16mb.csv
 └── platformio.ini
 ```

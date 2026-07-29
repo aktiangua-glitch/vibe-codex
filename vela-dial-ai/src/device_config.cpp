@@ -5,11 +5,18 @@
 #include <stddef.h>
 #include <string.h>
 
+#if __has_include("vela_secrets.h")
+#include "vela_secrets.h"
+#endif
+
+#ifndef VELA_DEFAULT_BRIDGE_PORT
+#define VELA_DEFAULT_BRIDGE_PORT 8787
+#endif
+
 namespace {
 
 constexpr uint32_t kConfigMagic = 0x56454C41UL;  // "VELA"
 constexpr uint16_t kConfigSchemaVersion = 1;
-constexpr uint16_t kDefaultBridgePort = 8787;
 constexpr char kPreferencesNamespace[] = "vela_device";
 constexpr char kPreferencesKey[] = "config";
 
@@ -82,7 +89,35 @@ void device_config_set_defaults(DeviceConfig *config)
     memset(config, 0, sizeof(*config));
     config->magic = kConfigMagic;
     config->schema_version = kConfigSchemaVersion;
-    config->bridge_port = kDefaultBridgePort;
+    config->bridge_port = VELA_DEFAULT_BRIDGE_PORT;
+#ifdef VELA_DEFAULT_WIFI_SSID
+    snprintf(
+        config->wifi_ssid,
+        sizeof(config->wifi_ssid),
+        "%s",
+        VELA_DEFAULT_WIFI_SSID);
+#endif
+#ifdef VELA_DEFAULT_WIFI_PASSWORD
+    snprintf(
+        config->wifi_password,
+        sizeof(config->wifi_password),
+        "%s",
+        VELA_DEFAULT_WIFI_PASSWORD);
+#endif
+#ifdef VELA_DEFAULT_BRIDGE_HOST
+    snprintf(
+        config->bridge_host,
+        sizeof(config->bridge_host),
+        "%s",
+        VELA_DEFAULT_BRIDGE_HOST);
+#endif
+#ifdef VELA_DEFAULT_BRIDGE_TOKEN
+    snprintf(
+        config->bridge_token,
+        sizeof(config->bridge_token),
+        "%s",
+        VELA_DEFAULT_BRIDGE_TOKEN);
+#endif
     config->crc32 = config_crc(*config);
 }
 
@@ -109,15 +144,23 @@ bool device_config_load(DeviceConfig *config)
         return false;
     }
     device_config_set_defaults(config);
+    const bool defaults_valid = device_config_is_valid(*config);
 
     Preferences preferences;
-    if (!preferences.begin(kPreferencesNamespace, true)) {
-        return false;
+    // Open read/write so Preferences can create the namespace on a fresh
+    // device. Read-only begin logs an NVS NOT_FOUND error every boot even
+    // though falling back to compiled defaults is expected.
+    if (!preferences.begin(kPreferencesNamespace, false)) {
+        return defaults_valid;
+    }
+    if (!preferences.isKey(kPreferencesKey)) {
+        preferences.end();
+        return defaults_valid;
     }
     const size_t stored_size = preferences.getBytesLength(kPreferencesKey);
     if (stored_size != sizeof(DeviceConfig)) {
         preferences.end();
-        return false;
+        return defaults_valid;
     }
 
     DeviceConfig stored = {};
@@ -125,7 +168,7 @@ bool device_config_load(DeviceConfig *config)
         preferences.getBytes(kPreferencesKey, &stored, sizeof(stored));
     preferences.end();
     if (read != sizeof(stored) || !device_config_is_valid(stored)) {
-        return false;
+        return defaults_valid;
     }
     *config = stored;
     return true;

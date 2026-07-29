@@ -5,7 +5,6 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
-#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <string.h>
@@ -36,7 +35,6 @@ uint32_t s_connect_started_ms = 0;
 uint32_t s_last_online_refresh_ms = 0;
 char s_device_id[20] = {};
 char s_ap_ssid[VELA_WIFI_SSID_BYTES] = {};
-char s_ap_password[24] = {};
 char s_pending_reason[VELA_ERROR_TEXT_BYTES] = {};
 
 void copy_text(char *destination, size_t capacity, const char *source)
@@ -130,7 +128,7 @@ void update_access_point_fields()
     copy_text(
         s_snapshot.access_point_password,
         sizeof(s_snapshot.access_point_password),
-        s_ap_active ? s_ap_password : "");
+        "");
     copy_text(
         s_snapshot.access_point_ip,
         sizeof(s_snapshot.access_point_ip),
@@ -361,7 +359,7 @@ void start_station(uint32_t now_ms, bool keep_access_point)
     Serial.printf("[NET] Connecting to Wi-Fi '%s'\n", s_config.wifi_ssid);
 }
 
-void generate_access_point_credentials()
+void generate_access_point_ssid()
 {
     const uint64_t mac = ESP.getEfuseMac();
     snprintf(
@@ -374,11 +372,6 @@ void generate_access_point_credentials()
         sizeof(s_ap_ssid),
         "Vela-%06lX",
         static_cast<unsigned long>(mac & 0xFFFFFFUL));
-    snprintf(
-        s_ap_password,
-        sizeof(s_ap_password),
-        "Vela-%08lX",
-        static_cast<unsigned long>(esp_random()));
 }
 
 void start_access_point(const char *reason)
@@ -387,8 +380,9 @@ void start_access_point(const char *reason)
     log_internal_heap("before setup AP");
     WiFi.mode(WIFI_AP_STA);
     if (!s_ap_active) {
-        generate_access_point_credentials();
-        if (!WiFi.softAP(s_ap_ssid, s_ap_password)) {
+        generate_access_point_ssid();
+        const bool started = WiFi.softAP(s_ap_ssid);
+        if (!started) {
             s_snapshot.phase = ConnectivityPhase::Error;
             copy_text(
                 s_snapshot.error,
@@ -481,7 +475,7 @@ bool connectivity_service_begin()
     s_snapshot.bridge_port = kDefaultBridgePort;
     device_config_set_defaults(&s_config);
     s_config_valid = device_config_load(&s_config);
-    generate_access_point_credentials();
+    generate_access_point_ssid();
     update_config_fields();
     publish_snapshot();
     s_started = true;

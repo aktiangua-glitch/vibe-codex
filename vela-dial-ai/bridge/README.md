@@ -268,6 +268,11 @@ export VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.auc_turbo
 `X-Api-Sequence: -1`，读取 `result.text`。没有使用非官方 Maven SDK，密钥也
 不会下发 ESP32。
 
+当前接口接收一条完整 WAV，适合旋钮语音命令。长时间听写将使用另一条流式
+链路：ESP32 持续向局域网 Bridge 发送 24 kHz、16-bit、mono PCM 分片，Bridge
+再通过火山引擎双向流式 WebSocket 上报。设备仍以连续静音 2 秒结束当前语句；
+云端 API Key 和 WebSocket 鉴权始终只存在 Java 进程中。
+
 ## 构建和测试
 
 ```sh

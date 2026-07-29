@@ -10,6 +10,11 @@
 #include "bridge_client.h"
 #include "bridge_models.h"
 #include "knob.h"
+#include "text_utils.h"
+
+extern "C" {
+LV_FONT_DECLARE(vela_cjk_16);
+}
 
 namespace {
 
@@ -21,6 +26,7 @@ constexpr uint32_t kVoiceSilenceMs = 2000;
 constexpr uint32_t kVoiceNoSpeechMs = 10000;
 constexpr uint32_t kVoiceMaxMs = 30000;
 constexpr uint32_t kRecordingStartTimeoutMs = 3000;
+constexpr uint32_t kRecordingBusyTimeoutMs = 5000;
 constexpr uint32_t kAudioStaleMs = 1800;
 constexpr uint32_t kVoiceFinalizeMaxMs = 2500;
 constexpr uint32_t kResultMs = 1250;
@@ -43,6 +49,7 @@ const lv_color_t kRed = lv_color_hex(0xFF6F7D);
 const lv_color_t kPurple = lv_color_hex(0x9A83FF);
 
 const lv_font_t *const kCjk = &lv_font_montserrat_16;
+const lv_font_t *const kDynamicCjk = &vela_cjk_16;
 
 enum class Surface : uint8_t {
     Provisioning,
@@ -81,6 +88,7 @@ enum class VoicePurpose : uint8_t {
 };
 
 enum class VoiceStage : uint8_t {
+    Preparing,
     Listening,
     Finalizing,
 };
@@ -132,8 +140,9 @@ bool s_back_armed = false;
 uint32_t s_back_until_ms = 0;
 
 VoicePurpose s_voice_purpose = VoicePurpose::NewSession;
-VoiceStage s_voice_stage = VoiceStage::Listening;
+VoiceStage s_voice_stage = VoiceStage::Preparing;
 uint32_t s_voice_started_ms = 0;
+uint32_t s_voice_prepare_started_ms = 0;
 uint32_t s_last_speech_ms = 0;
 uint32_t s_voice_finalize_started_ms = 0;
 bool s_speech_seen = false;
@@ -190,13 +199,27 @@ void show_error(
     const char *title,
     const char *subtitle,
     Surface next);
+bool start_voice_recording(uint32_t now);
 
 void copy_text(char *destination, size_t capacity, const char *source)
 {
-    if (destination == nullptr || capacity == 0) {
-        return;
+    vela_copy_utf8(destination, capacity, source);
+}
+
+bool has_non_ascii_text(const char *text)
+{
+    if (text == nullptr) {
+        return false;
     }
-    snprintf(destination, capacity, "%s", source == nullptr ? "" : source);
+    for (const uint8_t *cursor =
+             reinterpret_cast<const uint8_t *>(text);
+         *cursor != 0U;
+         ++cursor) {
+        if (*cursor >= 0x80U) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int clamp_int(int value, int low, int high)
@@ -238,7 +261,10 @@ lv_obj_t *make_label(
 {
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, font, LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        label,
+        has_non_ascii_text(text) ? kDynamicCjk : font,
+        LV_PART_MAIN);
     lv_obj_set_style_text_color(label, color, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(label, 0, LV_PART_MAIN);
     lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
@@ -783,11 +809,13 @@ void render_provisioning()
         kText,
         13,
         204);
+    const char *access_label =
+        !connectivity.access_point_active
+            ? "Starting setup AP..."
+            : "OPEN - NO PASSWORD";
     make_centered_label(
         credentials,
-        connectivity.access_point_password[0] == '\0'
-            ? "Starting secure AP..."
-            : connectivity.access_point_password,
+        access_label,
         &lv_font_montserrat_16,
         kCyan,
         47,
@@ -1316,6 +1344,24 @@ void render_voice_listening()
         s_root, "SILENCE TO SEND", &lv_font_montserrat_14, kMuted, 296, 180);
 }
 
+void render_voice_preparing()
+{
+    render_header(
+        s_voice_purpose == VoicePurpose::NewSession
+            ? "NEW SESSION"
+            : "REJECT REASON");
+    render_spinner(111, 83, 138, kCyan);
+    make_centered_label(
+        s_root, "PREPARING MIC", &lv_font_montserrat_20, kText, 135, 220);
+    make_centered_label(
+        s_root,
+        "Finishing the previous recording",
+        &lv_font_montserrat_14,
+        kMuted,
+        250,
+        270);
+}
+
 void render_voice_finalizing()
 {
     render_header(
@@ -1342,10 +1388,16 @@ void render_voice_finalizing()
 
 void render_voice()
 {
-    if (s_voice_stage == VoiceStage::Listening) {
-        render_voice_listening();
-    } else {
-        render_voice_finalizing();
+    switch (s_voice_stage) {
+        case VoiceStage::Preparing:
+            render_voice_preparing();
+            break;
+        case VoiceStage::Listening:
+            render_voice_listening();
+            break;
+        case VoiceStage::Finalizing:
+            render_voice_finalizing();
+            break;
     }
 }
 
@@ -1596,36 +1648,69 @@ void enter_detail(SessionRecord *session)
     render_surface();
 }
 
+bool start_voice_recording(uint32_t now)
+{
+    s_voice_started_ms = now;
+    s_last_speech_ms = now;
+    s_speech_seen = false;
+    s_recording_started = false;
+    s_last_audio_frame = 0;
+    s_last_audio_frame_ms = now;
+    s_recording_requested = board_recording_start();
+    if (s_recording_requested) {
+        s_voice_stage = VoiceStage::Listening;
+        return true;
+    }
+
+    const RecordingStatus recording = board_get_recording_status();
+    if (recording.starting ||
+        recording.recording ||
+        recording.stopping) {
+        s_voice_stage = VoiceStage::Preparing;
+        return false;
+    }
+
+    Serial.printf(
+        "[VOICE] Recording start rejected: %s\n",
+        recording.error[0] != '\0'
+            ? recording.error
+            : "unknown error");
+    show_error(
+        "RECORD ERROR",
+        recording.error[0] != '\0'
+            ? recording.error
+            : "Recorder could not start. Not sent.",
+        s_voice_purpose == VoicePurpose::NewSession
+            ? Surface::Sessions
+            : Surface::Detail);
+    return false;
+}
+
 void enter_voice(VoicePurpose purpose)
 {
     cancel_dwell();
     reset_back_hint();
     s_voice_purpose = purpose;
-    s_voice_stage = VoiceStage::Listening;
-    s_voice_started_ms = millis();
-    s_last_speech_ms = s_voice_started_ms;
-    s_speech_seen = false;
+    s_voice_stage = VoiceStage::Preparing;
+    s_voice_prepare_started_ms = millis();
+    s_recording_requested = false;
     s_recording_started = false;
-    s_last_audio_frame = 0;
-    s_last_audio_frame_ms = s_voice_started_ms;
-    s_recording_requested = board_recording_start();
-    if (!s_recording_requested) {
-        const RecordingStatus recording = board_get_recording_status();
-        Serial.printf(
-            "[VOICE] Recording start rejected: %s\n",
-            recording.error[0] != '\0'
-                ? recording.error
-                : "unknown error");
-        show_error(
-            "RECORD ERROR",
-            "Recording unavailable. Not sent.",
-            purpose == VoicePurpose::NewSession
-                ? Surface::Sessions
-                : Surface::Detail);
-        return;
+
+    const RecordingStatus recording = board_get_recording_status();
+    if (recording.starting || recording.recording) {
+        (void)board_recording_stop();
     }
+
     s_surface = Surface::Voice;
     board_play_haptic(0);
+    if (!recording.starting &&
+        !recording.recording &&
+        !recording.stopping) {
+        (void)start_voice_recording(s_voice_prepare_started_ms);
+        if (s_surface != Surface::Voice) {
+            return;
+        }
+    }
     render_surface();
 }
 
@@ -2041,6 +2126,34 @@ void process_voice(uint32_t now)
         return;
     }
 
+    if (s_voice_stage == VoiceStage::Preparing) {
+        const RecordingStatus recording = board_get_recording_status();
+        const bool busy =
+            recording.starting ||
+            recording.recording ||
+            recording.stopping;
+        if (!busy) {
+            if (start_voice_recording(now) &&
+                s_surface == Surface::Voice) {
+                render_surface();
+            }
+            return;
+        }
+        if (now - s_voice_prepare_started_ms >=
+            kRecordingBusyTimeoutMs) {
+            if (recording.starting || recording.recording) {
+                (void)board_recording_stop();
+            }
+            show_error(
+                "RECORDER BUSY",
+                "Previous recording did not finish.",
+                s_voice_purpose == VoicePurpose::NewSession
+                    ? Surface::Sessions
+                    : Surface::Detail);
+        }
+        return;
+    }
+
     if (s_voice_stage == VoiceStage::Listening) {
         const RecordingStatus recording = board_get_recording_status();
         if (recording.recording) {
@@ -2071,6 +2184,9 @@ void process_voice(uint32_t now)
 
         if (!s_recording_started &&
             elapsed >= kRecordingStartTimeoutMs) {
+            if (recording.starting || recording.recording) {
+                (void)board_recording_stop();
+            }
             show_error(
                 "RECORD TIMEOUT",
                 "Recorder did not start. Not sent.",
