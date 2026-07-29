@@ -4,6 +4,7 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -44,6 +45,19 @@ void copy_text(char *destination, size_t capacity, const char *source)
         return;
     }
     snprintf(destination, capacity, "%s", source == nullptr ? "" : source);
+}
+
+void log_internal_heap(const char *stage)
+{
+    Serial.printf(
+        "[MEM] %s: internal=%u, largest=%u\n",
+        stage,
+        static_cast<unsigned>(
+            heap_caps_get_free_size(
+                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(
+            heap_caps_get_largest_free_block(
+                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
 }
 
 bool due(uint32_t now, uint32_t deadline)
@@ -320,6 +334,7 @@ void start_station(uint32_t now_ms, bool keep_access_point)
     if (!s_config_valid) {
         return;
     }
+    log_internal_heap("before Wi-Fi station");
     if (!keep_access_point) {
         stop_access_point();
         WiFi.mode(WIFI_STA);
@@ -369,6 +384,7 @@ void generate_access_point_credentials()
 void start_access_point(const char *reason)
 {
     s_connecting = false;
+    log_internal_heap("before setup AP");
     WiFi.mode(WIFI_AP_STA);
     if (!s_ap_active) {
         generate_access_point_credentials();
@@ -381,6 +397,7 @@ void start_access_point(const char *reason)
             publish_snapshot();
             return;
         }
+        log_internal_heap("after setup AP");
         s_ap_active = true;
         register_handlers();
         s_dns.start(kDnsPort, "*", WiFi.softAPIP());

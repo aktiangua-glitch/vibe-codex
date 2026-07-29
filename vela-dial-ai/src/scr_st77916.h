@@ -519,10 +519,11 @@ bool scr_lvgl_display_init()
   lcd->invertColor(true);
   // setRotation(0);  //设置屏幕方向
 
-  // Keep the same ~52 KB DMA budget as the former single 72-row buffer, but
-  // split it into two 36-row buffers. LVGL can render the next block while
-  // QSPI DMA transmits the previous one, reducing full-screen transition time.
-  constexpr size_t lv_cache_rows = 36;
+  // Keep double buffering so LVGL can render while QSPI DMA transmits, but
+  // reserve enough internal/DMA-capable RAM for Wi-Fi AP, audio and recorder
+  // tasks. Two 16-row buffers use ~23 KB instead of ~52 KB; PSRAM cannot be
+  // used here because the panel DMA path requires internal memory.
+  constexpr size_t lv_cache_rows = 16;
   disp_draw_buf = (lv_color_t *)heap_caps_malloc(
       lv_cache_rows * SCREEN_RES_HOR * sizeof(lv_color_t),
       MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);

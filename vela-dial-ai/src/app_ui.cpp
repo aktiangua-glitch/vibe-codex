@@ -143,6 +143,10 @@ uint32_t s_last_audio_frame = 0;
 uint32_t s_last_audio_frame_ms = 0;
 
 BridgeSnapshot s_bridge_snapshot = {};
+// BridgeSnapshot is several kilobytes. Keep the copy buffer out of Arduino's
+// loopTask stack; nesting it with session rebuilding can otherwise overflow
+// the default loop stack during the first UI render.
+BridgeSnapshot s_bridge_snapshot_scratch = {};
 uint32_t s_bridge_generation = 0;
 uint32_t s_connectivity_revision = 0;
 uint64_t s_remote_revision = 0;
@@ -499,7 +503,10 @@ void rebuild_sessions_from_bridge()
             highlighted->thread_id);
     }
 
-    SessionRecord rebuilt[kMaxSessions] = {};
+    // Rebuild directly into the persistent array. A second five-entry array
+    // here adds several more kilobytes to loopTask's stack because every
+    // SessionRecord embeds the signed approval payload.
+    memset(s_sessions, 0, sizeof(s_sessions));
     size_t rebuilt_count = 0;
     const BridgeApproval *global = nullptr;
     if (s_bridge_snapshot.current_approval.present &&
@@ -518,7 +525,7 @@ void rebuild_sessions_from_bridge()
                 break;
             }
         }
-        import_session(&rebuilt[rebuilt_count++], matching, global);
+        import_session(&s_sessions[rebuilt_count++], matching, global);
     }
 
     for (uint8_t index = 0;
@@ -532,13 +539,9 @@ void rebuild_sessions_from_bridge()
             same_text(source.thread_id, global->thread_id)) {
             continue;
         }
-        import_session(&rebuilt[rebuilt_count++], &source, nullptr);
+        import_session(&s_sessions[rebuilt_count++], &source, nullptr);
     }
 
-    memset(s_sessions, 0, sizeof(s_sessions));
-    for (size_t index = 0; index < rebuilt_count; ++index) {
-        s_sessions[index] = rebuilt[index];
-    }
     s_session_count = rebuilt_count;
 
     s_selected_session = find_session(s_selected_thread_id);
@@ -2478,7 +2481,11 @@ void process_bridge_operation()
 
 void sync_bridge_snapshot(bool force_render)
 {
-    BridgeSnapshot latest = {};
+    memset(
+        &s_bridge_snapshot_scratch,
+        0,
+        sizeof(s_bridge_snapshot_scratch));
+    BridgeSnapshot &latest = s_bridge_snapshot_scratch;
     if (!bridge_client_get_snapshot(&latest)) {
         return;
     }
