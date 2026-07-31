@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: vela-dial-bridge
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  address: ${VELA_BIND_ADDRESS:0.0.0.0}
+  port: ${VELA_BRIDGE_PORT:8787}
+  shutdown: graceful
+
+vela:
+  security:
+    bearer-token: ${VELA_BRIDGE_TOKEN:}
+  codex:
+    enabled: ${VELA_CODEX_ENABLED:true}
+    executable: ${VELA_CODEX_EXECUTABLE:auto}
+    arguments:
+      - app-server
+      - --listen
+      - stdio://
+    default-cwd: ${VELA_DEFAULT_CWD:}
+    request-timeout: 30s
+    initialize-timeout: 20s
+    restart-delay: 3s
+    thread-refresh-interval: 15s
+    rate-limit-refresh-interval: 2m
+    thread-page-size: 50
+    approval-ttl: 2m
+  recordings:
+    directory: ${VELA_RECORDINGS_DIR:${user.home}/.vela-dial/recordings}
+    max-bytes: 26214400
+    idempotency-capacity: 512
+  asr:
+    provider: ${VELA_ASR_PROVIDER:codex}
+    volcengine:
+      endpoint: ${VOLCENGINE_ASR_ENDPOINT:https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash}
+      api-key: ${VOLCENGINE_ASR_API_KEY:}
+      resource-id: ${VOLCENGINE_ASR_RESOURCE_ID:volc.bigasr.auc_turbo}
+      uid: ${VOLCENGINE_ASR_UID:vela-dial}
+      request-timeout: 45s
+
+logging:
+  file:
+    name: ${VELA_BRIDGE_LOG_FILE:${user.home}/.vela-dial/vela-bridge.log}
+  level:
+    app.vela.bridge: INFO
