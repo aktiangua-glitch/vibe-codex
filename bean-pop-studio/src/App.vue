@@ -22,7 +22,7 @@ import {
   stylePresets,
 } from "./lib/imagePrep.js";
 import { createCommunitySourceDataUrl, getCommunitySourceSubjectBox } from "./lib/communitySources.js";
-import { getRecommendedTargetWidth } from "./lib/recommendation.js";
+import { getRecommendedMaxColors, getRecommendedTargetWidth } from "./lib/recommendation.js";
 import {
   loadSavedProjects,
   persistSavedProjects,
@@ -344,25 +344,13 @@ const recommendedAspectLabel = computed(() => (
   `${recommendedGridSize.value.width} × ${recommendedGridSize.value.height}`
 ));
 const recommendedMaxColors = computed(() => {
-  const limit = selectedBrandColorLimit.value;
-  const source = rawImage.value;
-  if (!source?.width || !source?.height) return Math.min(18, limit);
-
-  const longSide = Math.max(source.width, source.height);
-  const shortSide = Math.max(1, Math.min(source.width, source.height));
-  const aspect = longSide / shortSide;
-  let count = 16;
-
-  if (recommendedTargetWidth.value >= 116) count = 28;
-  else if (recommendedTargetWidth.value >= 87) count = 24;
-  else if (recommendedTargetWidth.value >= 58) count = 18;
-  else count = 12;
-
-  if (longSide >= 2800) count += 4;
-  if (aspect >= 1.5) count += 2;
-  if (subjectBox.value?.confidence < 0.42) count += 2;
-
-  return Math.max(8, Math.min(limit, Math.round(count / 2) * 2));
+  return getRecommendedMaxColors({
+    brandColorLimit: selectedBrandColorLimit.value,
+    imageHeight: rawImage.value?.height || 0,
+    imageWidth: rawImage.value?.width || 0,
+    subjectBox: subjectBox.value,
+    targetWidth: recommendedTargetWidth.value,
+  });
 });
 const projectTitle = computed(() => {
   const customTitle = config.projectName.trim();
@@ -924,7 +912,7 @@ function exportPng() {
       height: result.height,
       counts: visibleCounts.value,
       matrix: result.matrix,
-      showCodes: true,
+      showCodes: config.showCodes,
       roundBeads: config.roundBeads,
       hiddenColorCodes: activeHiddenColorCodes.value,
       hiddenCellKeys: backgroundHiddenCellKeys.value,

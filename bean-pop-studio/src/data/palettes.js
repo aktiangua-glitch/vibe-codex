@@ -1,20 +1,26 @@
-const GROUP_META = {
-  A: { label: "Warm", bucket: "warm" },
-  B: { label: "Green", bucket: "green" },
-  C: { label: "Blue", bucket: "blue" },
-  D: { label: "Purple", bucket: "purple" },
-  E: { label: "Pink", bucket: "pink" },
-  F: { label: "Red", bucket: "red" },
-  G: { label: "Skin Tone", bucket: "skin" },
-  H: { label: "Neutral", bucket: "neutral" },
-  M: { label: "Muted Neutral", bucket: "muted" },
-  P: { label: "Cream Pastel", bucket: "pastel" },
-  Q: { label: "Highlight", bucket: "accent" },
-  R: { label: "Bright Accent", bucket: "accent" },
-  T: { label: "Pure White", bucket: "neutral" },
-  Y: { label: "Candy Accent", bucket: "accent" },
-  ZG: { label: "Mist Neutral", bucket: "muted" },
+import paletteConfig from "./palettes.json" with { type: "json" };
+
+const DEFAULTS = {
+  available: true,
+  autoMatch: true,
+  finish: "solid",
+  material: "midi-5mm",
+  ...(paletteConfig.defaults || {}),
 };
+
+const GROUP_META = paletteConfig.groups || {};
+
+function normalizeHex(hex, code) {
+  const normalized = String(hex || "").trim().toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(normalized)) {
+    throw new Error(`Invalid palette hex for ${code || "unknown color"}: ${hex}`);
+  }
+  return normalized;
+}
+
+function normalizeString(value, fallback = "") {
+  return String(value || fallback).trim();
+}
 
 function createColor({
   code,
@@ -22,714 +28,115 @@ function createColor({
   hex,
   group,
   aliases = [],
-  available = true,
-  autoMatch = true,
-  finish = "solid",
+  available = DEFAULTS.available,
+  autoMatch = DEFAULTS.autoMatch,
+  finish = DEFAULTS.finish,
+  material = DEFAULTS.material,
 }) {
-  const groupMeta = GROUP_META[group] || {};
+  const colorCode = normalizeString(code);
+  const groupId = normalizeString(group);
+  const groupMeta = GROUP_META[groupId] || {};
+
+  if (!colorCode) {
+    throw new Error("Palette color is missing a code");
+  }
+  if (!groupId) {
+    throw new Error(`Palette color ${colorCode} is missing a group`);
+  }
+
   return {
-    aliases,
-    autoMatch,
-    available,
-    code,
-    family: group,
-    familyLabel: groupMeta.label || group,
-    finish,
-    group,
-    hex: hex.toLowerCase(),
-    material: "midi-5mm",
-    name,
+    aliases: Array.isArray(aliases) ? aliases : [],
+    autoMatch: autoMatch !== false,
+    available: available !== false,
+    code: colorCode,
+    family: groupId,
+    familyLabel: groupMeta.label || groupId,
+    finish: normalizeString(finish, DEFAULTS.finish),
+    group: groupId,
+    hex: normalizeHex(hex, colorCode),
+    material: normalizeString(material, DEFAULTS.material),
+    name: normalizeString(name, colorCode),
     toneBucket: groupMeta.bucket || "mixed",
   };
+}
+
+function normalizeCount(value, fallback) {
+  return Math.round(Number(value) || fallback);
 }
 
 function createBrand({
   id,
   label,
   shortLabel = id,
-  note,
-  badge,
-  paletteEdition,
+  note = "",
+  badge = "",
+  paletteEdition = "",
   coverage = "starter",
   marketFocus = "",
   maxOutputColors,
   defaultMaxColors = 18,
   recommendedColorCounts = [],
-  colors,
+  colors = [],
 }) {
-  const paletteSize = colors.length;
+  const brandId = normalizeString(id);
+  const normalizedColors = colors.map(createColor);
+  const paletteSize = normalizedColors.length;
+
+  if (!brandId) {
+    throw new Error("Palette brand is missing an id");
+  }
+  if (!paletteSize) {
+    throw new Error(`Palette brand ${brandId} has no colors`);
+  }
+
   const safeMaxOutputColors = Math.min(
     paletteSize,
-    Math.max(4, Math.round(Number(maxOutputColors) || paletteSize))
+    Math.max(4, normalizeCount(maxOutputColors, paletteSize))
   );
   const safeDefaultMaxColors = Math.min(
     safeMaxOutputColors,
-    Math.max(4, Math.round(Number(defaultMaxColors) || safeMaxOutputColors))
+    Math.max(4, normalizeCount(defaultMaxColors, safeMaxOutputColors))
   );
   const safeRecommendedCounts = [...new Set(
     recommendedColorCounts
-      .map((count) => Math.round(Number(count) || 0))
+      .map((count) => normalizeCount(count, 0))
       .filter((count) => count >= 4 && count <= safeMaxOutputColors)
       .concat(safeDefaultMaxColors, safeMaxOutputColors)
   )].sort((left, right) => left - right);
 
   return {
     badge,
-    colors,
+    colors: normalizedColors,
     coverage,
     defaultMaxColors: safeDefaultMaxColors,
-    id,
-    label,
+    id: brandId,
+    label: normalizeString(label, brandId),
     marketFocus,
     maxOutputColors: safeMaxOutputColors,
     note,
     paletteEdition,
     paletteSize,
     recommendedColorCounts: safeRecommendedCounts,
-    shortLabel,
+    shortLabel: normalizeString(shortLabel, brandId),
   };
 }
 
-// Historical seed list kept to preserve family/name metadata.
-// The active MARD palette is derived from the current 221-color mainland retail mapping below.
-const mardLegacySeedColors = [
-  createColor({ code: "A1", name: "Warm 01", hex: "#fdeaea", group: "A" }),
-  createColor({ code: "A2", name: "Warm 02", hex: "#fefaef", group: "A" }),
-  createColor({ code: "A3", name: "Warm 03", hex: "#f3e0cf", group: "A" }),
-  createColor({ code: "A4", name: "Warm 04", hex: "#f7dab8", group: "A" }),
-  createColor({ code: "A5", name: "Warm 05", hex: "#eacdbd", group: "A" }),
-  createColor({ code: "A6", name: "Warm 06", hex: "#dfb295", group: "A" }),
-  createColor({ code: "A7", name: "Warm 07", hex: "#f1c59e", group: "A" }),
-  createColor({ code: "A8", name: "Warm 08", hex: "#fbd5b5", group: "A" }),
-  createColor({ code: "A9", name: "Warm 09", hex: "#edb784", group: "A" }),
-  createColor({ code: "A10", name: "Warm 10", hex: "#dfb566", group: "A" }),
-  createColor({ code: "A11", name: "Warm 11", hex: "#efbc61", group: "A" }),
-  createColor({ code: "A12", name: "Warm 12", hex: "#fbca6e", group: "A" }),
-  createColor({ code: "A13", name: "Warm 13", hex: "#f9c620", group: "A" }),
-  createColor({ code: "A14", name: "Warm 14", hex: "#f0a429", group: "A" }),
-  createColor({ code: "A15", name: "Warm 15", hex: "#ea9229", group: "A" }),
-  createColor({ code: "A16", name: "Warm 16", hex: "#da7b28", group: "A" }),
-  createColor({ code: "A17", name: "Warm 17", hex: "#df6421", group: "A" }),
-  createColor({ code: "A18", name: "Warm 18", hex: "#c96220", group: "A" }),
-  createColor({ code: "A19", name: "Warm 19", hex: "#c2513c", group: "A" }),
-  createColor({ code: "A20", name: "Warm 20", hex: "#b43735", group: "A" }),
-  createColor({ code: "A21", name: "Warm 21", hex: "#da401f", group: "A" }),
-  createColor({ code: "A22", name: "Warm 22", hex: "#be172a", group: "A" }),
-  createColor({ code: "A23", name: "Warm 23", hex: "#901b1c", group: "A" }),
-  createColor({ code: "A24", name: "Warm 24", hex: "#a23b34", group: "A" }),
-  createColor({ code: "A25", name: "Warm 25", hex: "#f3872d", group: "A" }),
-  createColor({ code: "A26", name: "Warm 26", hex: "#fdd96e", group: "A" }),
-  createColor({ code: "B1", name: "Green 01", hex: "#f4ff00", group: "B" }),
-  createColor({ code: "B2", name: "Green 02", hex: "#fffccc", group: "B" }),
-  createColor({ code: "B3", name: "Green 03", hex: "#fef182", group: "B" }),
-  createColor({ code: "B4", name: "Green 04", hex: "#ece870", group: "B" }),
-  createColor({ code: "B5", name: "Green 05", hex: "#e8e0a4", group: "B" }),
-  createColor({ code: "B6", name: "Green 06", hex: "#c5cf52", group: "B" }),
-  createColor({ code: "B7", name: "Green 07", hex: "#bcca4f", group: "B" }),
-  createColor({ code: "B8", name: "Green 08", hex: "#aabf4f", group: "B" }),
-  createColor({ code: "B9", name: "Green 09", hex: "#a1b51b", group: "B" }),
-  createColor({ code: "B10", name: "Green 10", hex: "#87a138", group: "B" }),
-  createColor({ code: "B11", name: "Green 11", hex: "#729364", group: "B" }),
-  createColor({ code: "B12", name: "Green 12", hex: "#88aa60", group: "B" }),
-  createColor({ code: "B13", name: "Green 13", hex: "#8eaf8d", group: "B" }),
-  createColor({ code: "B14", name: "Green 14", hex: "#769363", group: "B" }),
-  createColor({ code: "B15", name: "Green 15", hex: "#759669", group: "B" }),
-  createColor({ code: "B16", name: "Green 16", hex: "#697a3d", group: "B" }),
-  createColor({ code: "B17", name: "Green 17", hex: "#5e6830", group: "B" }),
-  createColor({ code: "B18", name: "Green 18", hex: "#008c55", group: "B" }),
-  createColor({ code: "B19", name: "Green 19", hex: "#87b978", group: "B" }),
-  createColor({ code: "B20", name: "Green 20", hex: "#b7dd66", group: "B" }),
-  createColor({ code: "B21", name: "Green 21", hex: "#b4e482", group: "B" }),
-  createColor({ code: "B22", name: "Green 22", hex: "#a6ca90", group: "B" }),
-  createColor({ code: "B23", name: "Green 23", hex: "#d7f1e1", group: "B" }),
-  createColor({ code: "B24", name: "Green 24", hex: "#83cb66", group: "B" }),
-  createColor({ code: "B25", name: "Green 25", hex: "#6ab05a", group: "B" }),
-  createColor({ code: "B26", name: "Green 26", hex: "#32a55b", group: "B" }),
-  createColor({ code: "B27", name: "Green 27", hex: "#b4d198", group: "B" }),
-  createColor({ code: "B28", name: "Green 28", hex: "#94cc7a", group: "B" }),
-  createColor({ code: "B29", name: "Green 29", hex: "#67985f", group: "B" }),
-  createColor({ code: "B30", name: "Green 30", hex: "#3d6929", group: "B" }),
-  createColor({ code: "B31", name: "Green 31", hex: "#1c4f26", group: "B" }),
-  createColor({ code: "B32", name: "Green 32", hex: "#183018", group: "B" }),
-  createColor({ code: "C1", name: "Blue 01", hex: "#b9fbf2", group: "C" }),
-  createColor({ code: "C2", name: "Blue 02", hex: "#91e3d4", group: "C" }),
-  createColor({ code: "C3", name: "Blue 03", hex: "#bce7d7", group: "C" }),
-  createColor({ code: "C4", name: "Blue 04", hex: "#76cbd1", group: "C" }),
-  createColor({ code: "C5", name: "Blue 05", hex: "#4dbfb9", group: "C" }),
-  createColor({ code: "C6", name: "Blue 06", hex: "#46a99c", group: "C" }),
-  createColor({ code: "C7", name: "Blue 07", hex: "#3e9188", group: "C" }),
-  createColor({ code: "C8", name: "Blue 08", hex: "#6fb7c2", group: "C" }),
-  createColor({ code: "C9", name: "Blue 09", hex: "#5aacca", group: "C" }),
-  createColor({ code: "C10", name: "Blue 10", hex: "#4996b1", group: "C" }),
-  createColor({ code: "C11", name: "Blue 11", hex: "#4d8da2", group: "C" }),
-  createColor({ code: "C12", name: "Blue 12", hex: "#30789f", group: "C" }),
-  createColor({ code: "C13", name: "Blue 13", hex: "#2b6996", group: "C" }),
-  createColor({ code: "C14", name: "Blue 14", hex: "#225081", group: "C" }),
-  createColor({ code: "C15", name: "Blue 15", hex: "#b7ddf7", group: "C" }),
-  createColor({ code: "C16", name: "Blue 16", hex: "#97cff4", group: "C" }),
-  createColor({ code: "C17", name: "Blue 17", hex: "#83bee8", group: "C" }),
-  createColor({ code: "C18", name: "Blue 18", hex: "#6899d2", group: "C" }),
-  createColor({ code: "C19", name: "Blue 19", hex: "#5279c1", group: "C" }),
-  createColor({ code: "C20", name: "Blue 20", hex: "#2f60a8", group: "C" }),
-  createColor({ code: "C21", name: "Blue 21", hex: "#26447a", group: "C" }),
-  createColor({ code: "C22", name: "Blue 22", hex: "#15223a", group: "C" }),
-  createColor({ code: "C23", name: "Blue 23", hex: "#c0e3f0", group: "C" }),
-  createColor({ code: "C24", name: "Blue 24", hex: "#a6d8e6", group: "C" }),
-  createColor({ code: "C25", name: "Blue 25", hex: "#7ebac8", group: "C" }),
-  createColor({ code: "C26", name: "Blue 26", hex: "#79a8bf", group: "C" }),
-  createColor({ code: "C27", name: "Blue 27", hex: "#6b90a0", group: "C" }),
-  createColor({ code: "C28", name: "Blue 28", hex: "#4d7294", group: "C" }),
-  createColor({ code: "C29", name: "Blue 29", hex: "#364f71", group: "C" }),
-  createColor({ code: "D1", name: "Purple 01", hex: "#e3d7f8", group: "D" }),
-  createColor({ code: "D2", name: "Purple 02", hex: "#c5b9e6", group: "D" }),
-  createColor({ code: "D3", name: "Purple 03", hex: "#9e8dba", group: "D" }),
-  createColor({ code: "D4", name: "Purple 04", hex: "#a885d5", group: "D" }),
-  createColor({ code: "D5", name: "Purple 05", hex: "#8a6bb5", group: "D" }),
-  createColor({ code: "D6", name: "Purple 06", hex: "#5f4984", group: "D" }),
-  createColor({ code: "D7", name: "Purple 07", hex: "#4d3171", group: "D" }),
-  createColor({ code: "D8", name: "Purple 08", hex: "#8b5eab", group: "D" }),
-  createColor({ code: "D9", name: "Purple 09", hex: "#7a4b97", group: "D" }),
-  createColor({ code: "D10", name: "Purple 10", hex: "#653478", group: "D" }),
-  createColor({ code: "D11", name: "Purple 11", hex: "#b58ec2", group: "D" }),
-  createColor({ code: "D12", name: "Purple 12", hex: "#a75e93", group: "D" }),
-  createColor({ code: "D13", name: "Purple 13", hex: "#a64280", group: "D" }),
-  createColor({ code: "D14", name: "Purple 14", hex: "#a03c6b", group: "D" }),
-  createColor({ code: "D15", name: "Purple 15", hex: "#885882", group: "D" }),
-  createColor({ code: "D16", name: "Purple 16", hex: "#b83f92", group: "D" }),
-  createColor({ code: "D17", name: "Purple 17", hex: "#872d63", group: "D" }),
-  createColor({ code: "D18", name: "Purple 18", hex: "#de3a85", group: "D" }),
-  createColor({ code: "D19", name: "Purple 19", hex: "#d93c72", group: "D" }),
-  createColor({ code: "D20", name: "Purple 20", hex: "#c12a4c", group: "D" }),
-  createColor({ code: "D21", name: "Purple 21", hex: "#ba375f", group: "D" }),
-  createColor({ code: "D22", name: "Purple 22", hex: "#f0d3db", group: "D" }),
-  createColor({ code: "D23", name: "Purple 23", hex: "#cf7383", group: "D" }),
-  createColor({ code: "D24", name: "Purple 24", hex: "#d44570", group: "D" }),
-  createColor({ code: "D25", name: "Purple 25", hex: "#b31d42", group: "D" }),
-  createColor({ code: "D26", name: "Purple 26", hex: "#7b2025", group: "D" }),
-  createColor({ code: "E1", name: "Pink 01", hex: "#ffebf7", group: "E" }),
-  createColor({ code: "E2", name: "Pink 02", hex: "#fdddeb", group: "E" }),
-  createColor({ code: "E3", name: "Pink 03", hex: "#f9d3dd", group: "E" }),
-  createColor({ code: "E4", name: "Pink 04", hex: "#f8becc", group: "E" }),
-  createColor({ code: "E5", name: "Pink 05", hex: "#f9b9bf", group: "E" }),
-  createColor({ code: "E6", name: "Pink 06", hex: "#f99fab", group: "E" }),
-  createColor({ code: "E7", name: "Pink 07", hex: "#f68d8e", group: "E" }),
-  createColor({ code: "E8", name: "Pink 08", hex: "#f36d6a", group: "E" }),
-  createColor({ code: "E9", name: "Pink 09", hex: "#f3665b", group: "E" }),
-  createColor({ code: "E10", name: "Pink 10", hex: "#c9305a", group: "E" }),
-  createColor({ code: "E11", name: "Pink 11", hex: "#f8e0e7", group: "E" }),
-  createColor({ code: "E12", name: "Pink 12", hex: "#fbc8e2", group: "E" }),
-  createColor({ code: "E13", name: "Pink 13", hex: "#eeb6da", group: "E" }),
-  createColor({ code: "E14", name: "Pink 14", hex: "#ea9acc", group: "E" }),
-  createColor({ code: "E15", name: "Pink 15", hex: "#ea8ad9", group: "E" }),
-  createColor({ code: "E16", name: "Pink 16", hex: "#e780c4", group: "E" }),
-  createColor({ code: "E17", name: "Pink 17", hex: "#dd5199", group: "E" }),
-  createColor({ code: "E18", name: "Pink 18", hex: "#b25881", group: "E" }),
-  createColor({ code: "E19", name: "Pink 19", hex: "#c72d79", group: "E" }),
-  createColor({ code: "E20", name: "Pink 20", hex: "#94385b", group: "E" }),
-  createColor({ code: "E21", name: "Pink 21", hex: "#7f404a", group: "E" }),
-  createColor({ code: "E22", name: "Pink 22", hex: "#f7e1d6", group: "E" }),
-  createColor({ code: "E23", name: "Pink 23", hex: "#fde4d5", group: "E" }),
-  createColor({ code: "E24", name: "Pink 24", hex: "#f0d0c0", group: "E" }),
-  createColor({ code: "F1", name: "Red 01", hex: "#ffe3da", group: "F" }),
-  createColor({ code: "F2", name: "Red 02", hex: "#fed9c8", group: "F" }),
-  createColor({ code: "F3", name: "Red 03", hex: "#fad0c0", group: "F" }),
-  createColor({ code: "F4", name: "Red 04", hex: "#f8b8a3", group: "F" }),
-  createColor({ code: "F5", name: "Red 05", hex: "#f9b3a5", group: "F" }),
-  createColor({ code: "F6", name: "Red 06", hex: "#f29390", group: "F" }),
-  createColor({ code: "F7", name: "Red 07", hex: "#e38788", group: "F" }),
-  createColor({ code: "F8", name: "Red 08", hex: "#b7544a", group: "F" }),
-  createColor({ code: "F9", name: "Red 09", hex: "#aa413b", group: "F" }),
-  createColor({ code: "F10", name: "Red 10", hex: "#813b36", group: "F" }),
-  createColor({ code: "F11", name: "Red 11", hex: "#5b1416", group: "F" }),
-  createColor({ code: "F12", name: "Red 12", hex: "#fbe0b8", group: "F" }),
-  createColor({ code: "F13", name: "Red 13", hex: "#ffe1a1", group: "F" }),
-  createColor({ code: "F14", name: "Red 14", hex: "#f9c795", group: "F" }),
-  createColor({ code: "F15", name: "Red 15", hex: "#eca19a", group: "F" }),
-  createColor({ code: "F16", name: "Red 16", hex: "#e99891", group: "F" }),
-  createColor({ code: "F17", name: "Red 17", hex: "#ce7770", group: "F" }),
-  createColor({ code: "F18", name: "Red 18", hex: "#f6d0c3", group: "F" }),
-  createColor({ code: "F19", name: "Red 19", hex: "#ecb6a2", group: "F" }),
-  createColor({ code: "F20", name: "Red 20", hex: "#d99c84", group: "F" }),
-  createColor({ code: "F21", name: "Red 21", hex: "#cf875c", group: "F" }),
-  createColor({ code: "F22", name: "Red 22", hex: "#b35440", group: "F" }),
-  createColor({ code: "F23", name: "Red 23", hex: "#ad6856", group: "F" }),
-  createColor({ code: "F24", name: "Red 24", hex: "#8b493b", group: "F" }),
-  createColor({ code: "F25", name: "Red 25", hex: "#684a44", group: "F" }),
-  createColor({ code: "G1", name: "Skin Tone 01", hex: "#f7e9d5", group: "G" }),
-  createColor({ code: "G2", name: "Skin Tone 02", hex: "#f2d6b5", group: "G" }),
-  createColor({ code: "G3", name: "Skin Tone 03", hex: "#ebcaaa", group: "G" }),
-  createColor({ code: "G4", name: "Skin Tone 04", hex: "#e2bca0", group: "G" }),
-  createColor({ code: "G5", name: "Skin Tone 05", hex: "#e5a984", group: "G" }),
-  createColor({ code: "G6", name: "Skin Tone 06", hex: "#d58c68", group: "G" }),
-  createColor({ code: "G7", name: "Skin Tone 07", hex: "#cb8b3a", group: "G" }),
-  createColor({ code: "G8", name: "Skin Tone 08", hex: "#b67452", group: "G" }),
-  createColor({ code: "G9", name: "Skin Tone 09", hex: "#bf6d00", group: "G" }),
-  createColor({ code: "G10", name: "Skin Tone 10", hex: "#9a5d31", group: "G" }),
-  createColor({ code: "G11", name: "Skin Tone 11", hex: "#835a3b", group: "G" }),
-  createColor({ code: "G12", name: "Skin Tone 12", hex: "#936629", group: "G" }),
-  createColor({ code: "G13", name: "Skin Tone 13", hex: "#774c29", group: "G" }),
-  createColor({ code: "G14", name: "Skin Tone 14", hex: "#4a240f", group: "G" }),
-  createColor({ code: "G15", name: "Skin Tone 15", hex: "#51241b", group: "G" }),
-  createColor({ code: "G16", name: "Skin Tone 16", hex: "#28110a", group: "G" }),
-  createColor({ code: "G17", name: "Skin Tone 17", hex: "#ebd7c7", group: "G" }),
-  createColor({ code: "G18", name: "Skin Tone 18", hex: "#e9d1be", group: "G" }),
-  createColor({ code: "G19", name: "Skin Tone 19", hex: "#d5c0af", group: "G" }),
-  createColor({ code: "G20", name: "Skin Tone 20", hex: "#b69c89", group: "G" }),
-  createColor({ code: "G21", name: "Skin Tone 21", hex: "#a2958e", group: "G" }),
-  createColor({ code: "H1", name: "Neutral 01", hex: "#ffffff", group: "H" }),
-  createColor({ code: "H2", name: "Neutral 02", hex: "#fefefe", group: "H" }),
-  createColor({ code: "H3", name: "Neutral 03", hex: "#f6f7f2", group: "H" }),
-  createColor({ code: "H4", name: "Neutral 04", hex: "#f9f6ef", group: "H" }),
-  createColor({ code: "H5", name: "Neutral 05", hex: "#eaeaea", group: "H" }),
-  createColor({ code: "H6", name: "Neutral 06", hex: "#f1f0e7", group: "H" }),
-  createColor({ code: "H7", name: "Neutral 07", hex: "#f4f5e8", group: "H" }),
-  createColor({ code: "H8", name: "Neutral 08", hex: "#cbc4b8", group: "H" }),
-  createColor({ code: "H9", name: "Neutral 09", hex: "#c9bfb8", group: "H" }),
-  createColor({ code: "H10", name: "Neutral 10", hex: "#aaa69d", group: "H" }),
-  createColor({ code: "H11", name: "Neutral 11", hex: "#c1bdb3", group: "H" }),
-  createColor({ code: "H12", name: "Neutral 12", hex: "#91857a", group: "H" }),
-  createColor({ code: "H13", name: "Neutral 13", hex: "#7c7a80", group: "H" }),
-  createColor({ code: "H14", name: "Neutral 14", hex: "#766b5b", group: "H" }),
-  createColor({ code: "H15", name: "Neutral 15", hex: "#534b53", group: "H" }),
-  createColor({ code: "H16", name: "Neutral 16", hex: "#858483", group: "H" }),
-  createColor({ code: "H17", name: "Neutral 17", hex: "#67676c", group: "H" }),
-  createColor({ code: "H18", name: "Neutral 18", hex: "#7a7b85", group: "H" }),
-  createColor({ code: "H19", name: "Neutral 19", hex: "#56565d", group: "H" }),
-  createColor({ code: "H20", name: "Neutral 20", hex: "#414142", group: "H" }),
-  createColor({ code: "H21", name: "Neutral 21", hex: "#2c2b2f", group: "H" }),
-  createColor({ code: "H22", name: "Neutral 22", hex: "#000000", group: "H" }),
-  createColor({ code: "H23", name: "Neutral 23", hex: "#1a1a1d", group: "H" }),
-  createColor({ code: "M1", name: "Muted Neutral 01", hex: "#e4e4da", group: "M" }),
-  createColor({ code: "M2", name: "Muted Neutral 02", hex: "#e2e2d4", group: "M" }),
-  createColor({ code: "M3", name: "Muted Neutral 03", hex: "#d5d2c3", group: "M" }),
-  createColor({ code: "M4", name: "Muted Neutral 04", hex: "#cacbb0", group: "M" }),
-  createColor({ code: "M5", name: "Muted Neutral 05", hex: "#b7b9a3", group: "M" }),
-  createColor({ code: "M6", name: "Muted Neutral 06", hex: "#b6b6a0", group: "M" }),
-  createColor({ code: "M7", name: "Muted Neutral 07", hex: "#b2b4a7", group: "M" }),
-  createColor({ code: "M8", name: "Muted Neutral 08", hex: "#c9d1c9", group: "M" }),
-  createColor({ code: "M9", name: "Muted Neutral 09", hex: "#b9c7bb", group: "M" }),
-  createColor({ code: "M10", name: "Muted Neutral 10", hex: "#b6c0b6", group: "M" }),
-  createColor({ code: "M11", name: "Muted Neutral 11", hex: "#abbeac", group: "M" }),
-  createColor({ code: "M12", name: "Muted Neutral 12", hex: "#c6cdd0", group: "M" }),
-  createColor({ code: "M13", name: "Muted Neutral 13", hex: "#bfc7c9", group: "M" }),
-  createColor({ code: "M14", name: "Muted Neutral 14", hex: "#cfd1d1", group: "M" }),
-  createColor({ code: "M15", name: "Muted Neutral 15", hex: "#d7d4d7", group: "M" }),
-  createColor({ code: "P1", name: "Cream Pastel 01", hex: "#fff2e5", group: "P" }),
-  createColor({ code: "P2", name: "Cream Pastel 02", hex: "#f9eade", group: "P" }),
-  createColor({ code: "P3", name: "Cream Pastel 03", hex: "#f7f1d7", group: "P" }),
-  createColor({ code: "P4", name: "Cream Pastel 04", hex: "#f7f5d8", group: "P" }),
-  createColor({ code: "P5", name: "Cream Pastel 05", hex: "#ece1d9", group: "P" }),
-  createColor({ code: "P6", name: "Cream Pastel 06", hex: "#dcc9af", group: "P" }),
-  createColor({ code: "P7", name: "Cream Pastel 07", hex: "#f2dac4", group: "P" }),
-  createColor({ code: "P8", name: "Cream Pastel 08", hex: "#f1d1b2", group: "P" }),
-  createColor({ code: "P9", name: "Cream Pastel 09", hex: "#f9d4c0", group: "P" }),
-  createColor({ code: "P10", name: "Cream Pastel 10", hex: "#fce0d7", group: "P" }),
-  createColor({ code: "P11", name: "Cream Pastel 11", hex: "#f9c8c8", group: "P" }),
-  createColor({ code: "P12", name: "Cream Pastel 12", hex: "#f5d9d2", group: "P" }),
-  createColor({ code: "P13", name: "Cream Pastel 13", hex: "#f2d2ce", group: "P" }),
-  createColor({ code: "P14", name: "Cream Pastel 14", hex: "#f1ded7", group: "P" }),
-  createColor({ code: "P15", name: "Cream Pastel 15", hex: "#efe1e2", group: "P" }),
-  createColor({ code: "P16", name: "Cream Pastel 16", hex: "#e8dae4", group: "P" }),
-  createColor({ code: "P17", name: "Cream Pastel 17", hex: "#e6d4e0", group: "P" }),
-  createColor({ code: "P18", name: "Cream Pastel 18", hex: "#d0cfd3", group: "P" }),
-  createColor({ code: "P19", name: "Cream Pastel 19", hex: "#cfd5db", group: "P" }),
-  createColor({ code: "P20", name: "Cream Pastel 20", hex: "#d5d8e1", group: "P" }),
-  createColor({ code: "P21", name: "Cream Pastel 21", hex: "#d6e5e7", group: "P" }),
-  createColor({ code: "P22", name: "Cream Pastel 22", hex: "#d5e4dd", group: "P" }),
-  createColor({ code: "P23", name: "Cream Pastel 23", hex: "#e4e4e4", group: "P" }),
-  createColor({ code: "Q1", name: "Highlight 01", hex: "#fffcd9", group: "Q" }),
-  createColor({ code: "Q2", name: "Highlight 02", hex: "#fdf9b5", group: "Q" }),
-  createColor({ code: "Q3", name: "Highlight 03", hex: "#fee535", group: "Q" }),
-  createColor({ code: "Q4", name: "Highlight 04", hex: "#cbde7c", group: "Q" }),
-  createColor({ code: "Q5", name: "Highlight 05", hex: "#ff8a36", group: "Q" }),
-  createColor({ code: "R1", name: "Bright Accent 01", hex: "#fee7a0", group: "R" }),
-  createColor({ code: "R2", name: "Bright Accent 02", hex: "#ffe89b", group: "R" }),
-  createColor({ code: "R3", name: "Bright Accent 03", hex: "#ffd93d", group: "R" }),
-  createColor({ code: "R4", name: "Bright Accent 04", hex: "#ffc200", group: "R" }),
-  createColor({ code: "R5", name: "Bright Accent 05", hex: "#efdb48", group: "R" }),
-  createColor({ code: "R6", name: "Bright Accent 06", hex: "#d9df33", group: "R" }),
-  createColor({ code: "R7", name: "Bright Accent 07", hex: "#d2dd32", group: "R" }),
-  createColor({ code: "R8", name: "Bright Accent 08", hex: "#b7d533", group: "R" }),
-  createColor({ code: "R9", name: "Bright Accent 09", hex: "#90c510", group: "R" }),
-  createColor({ code: "R10", name: "Bright Accent 10", hex: "#77b449", group: "R" }),
-  createColor({ code: "R11", name: "Bright Accent 11", hex: "#5aa847", group: "R" }),
-  createColor({ code: "R12", name: "Bright Accent 12", hex: "#72c25a", group: "R" }),
-  createColor({ code: "R13", name: "Bright Accent 13", hex: "#90d95f", group: "R" }),
-  createColor({ code: "R14", name: "Bright Accent 14", hex: "#91cd83", group: "R" }),
-  createColor({ code: "R15", name: "Bright Accent 15", hex: "#b9efa7", group: "R" }),
-  createColor({ code: "R16", name: "Bright Accent 16", hex: "#b3e6d2", group: "R" }),
-  createColor({ code: "R17", name: "Bright Accent 17", hex: "#00cac7", group: "R" }),
-  createColor({ code: "R18", name: "Bright Accent 18", hex: "#00a8cc", group: "R" }),
-  createColor({ code: "R19", name: "Bright Accent 19", hex: "#0098e5", group: "R" }),
-  createColor({ code: "R20", name: "Bright Accent 20", hex: "#007fd5", group: "R" }),
-  createColor({ code: "R21", name: "Bright Accent 21", hex: "#266cce", group: "R" }),
-  createColor({ code: "R22", name: "Bright Accent 22", hex: "#3854cc", group: "R" }),
-  createColor({ code: "R23", name: "Bright Accent 23", hex: "#6c46ab", group: "R" }),
-  createColor({ code: "R24", name: "Bright Accent 24", hex: "#803eaa", group: "R" }),
-  createColor({ code: "R25", name: "Bright Accent 25", hex: "#a53c94", group: "R" }),
-  createColor({ code: "R26", name: "Bright Accent 26", hex: "#cc3c88", group: "R" }),
-  createColor({ code: "R27", name: "Bright Accent 27", hex: "#f84789", group: "R" }),
-  createColor({ code: "R28", name: "Bright Accent 28", hex: "#fe7bac", group: "R" }),
-  createColor({ code: "T1", name: "Pure White 01", hex: "#fefefe", group: "T" }),
-  createColor({ code: "Y1", name: "Candy Accent 01", hex: "#fecf43", group: "Y" }),
-  createColor({ code: "Y2", name: "Candy Accent 02", hex: "#ff8903", group: "Y" }),
-  createColor({ code: "Y3", name: "Candy Accent 03", hex: "#f05030", group: "Y" }),
-  createColor({ code: "Y4", name: "Candy Accent 04", hex: "#ff6385", group: "Y" }),
-  createColor({ code: "Y5", name: "Candy Accent 05", hex: "#9a4f67", group: "Y" }),
-  createColor({ code: "ZG1", name: "Mist Neutral 01", hex: "#dde1dd", group: "ZG" }),
-  createColor({ code: "ZG2", name: "Mist Neutral 02", hex: "#cdd0d2", group: "ZG" }),
-  createColor({ code: "ZG3", name: "Mist Neutral 03", hex: "#cbcfd6", group: "ZG" }),
-  createColor({ code: "ZG4", name: "Mist Neutral 04", hex: "#c4c8d2", group: "ZG" }),
-  createColor({ code: "ZG5", name: "Mist Neutral 05", hex: "#c0c5d5", group: "ZG" }),
-  createColor({ code: "ZG6", name: "Mist Neutral 06", hex: "#b2afbf", group: "ZG" }),
-  createColor({ code: "ZG7", name: "Mist Neutral 07", hex: "#c4b9c0", group: "ZG" }),
-  createColor({ code: "ZG8", name: "Mist Neutral 08", hex: "#cab9c2", group: "ZG" }),
-];
+function createCatalog(config) {
+  const brands = config.brands || {};
+  const order = Array.isArray(config.brandOrder) && config.brandOrder.length
+    ? config.brandOrder
+    : Object.keys(brands);
 
-const MARD_221_HEX_BY_CODE = Object.freeze(
-  Object.fromEntries(`
-A1 #faf4c8
-A2 #ffffd5
-A3 #feff8b
-A4 #fbed56
-A5 #f4d738
-A6 #feac4c
-A7 #fe8b4c
-A8 #ffda45
-A9 #ff995b
-A10 #f77c31
-A11 #ffdd99
-A12 #fe9f72
-A13 #ffc365
-A14 #fd543d
-A15 #fff365
-A16 #ffff9f
-A17 #ffe36e
-A18 #febe7d
-A19 #fd7c72
-A20 #ffd568
-A21 #ffe395
-A22 #f4f57d
-A23 #e6c9b7
-A24 #f7f8a2
-A25 #ffd67d
-A26 #ffc830
-B1 #e6ee31
-B2 #63f347
-B3 #9ef780
-B4 #5de035
-B5 #35e352
-B6 #65e2a6
-B7 #3daf80
-B8 #1c9c4f
-B9 #27523a
-B10 #95d3c2
-B11 #5d722a
-B12 #166f41
-B13 #caeb7b
-B14 #ade946
-B15 #2e5132
-B16 #c5ed9c
-B17 #9bb13a
-B18 #e6ee49
-B19 #24b88c
-B20 #c2f0cc
-B21 #156a6b
-B22 #0b3c43
-B23 #303a21
-B24 #eefca5
-B25 #4e846d
-B26 #8d7a35
-B27 #cce1af
-B28 #9ee5b9
-B29 #c5e254
-B30 #e2fcb1
-B31 #b0e792
-B32 #9cab5a
-C1 #e8ffe7
-C2 #a9f9fc
-C3 #a0e2fb
-C4 #41ccff
-C5 #01aceb
-C6 #50aaf0
-C7 #3677d2
-C8 #0f54c0
-C9 #324bca
-C10 #3ebce2
-C11 #28ddde
-C12 #1c334d
-C13 #cde8ff
-C14 #d5fdff
-C15 #22c4c6
-C16 #1557a8
-C17 #04d1f6
-C18 #1d3344
-C19 #1887a2
-C20 #176daf
-C21 #beddff
-C22 #67b4be
-C23 #c8e2ff
-C24 #7cc4ff
-C25 #a9e5e5
-C26 #3caed8
-C27 #d3dffa
-C28 #bbcfed
-C29 #34488e
-D1 #aeb4f2
-D2 #858edd
-D3 #2f54af
-D4 #182a84
-D5 #b843c5
-D6 #ac7bde
-D7 #8854b3
-D8 #e2d3ff
-D9 #d5b9f8
-D10 #361851
-D11 #b9bae1
-D12 #de9ad4
-D13 #b90095
-D14 #8b279b
-D15 #2f1f90
-D16 #e3e1ee
-D17 #c4d4f6
-D18 #a45ec7
-D19 #d8c3d7
-D20 #9c32b2
-D21 #9a009b
-D22 #333a95
-D23 #ebdafc
-D24 #7786e5
-D25 #494fc7
-D26 #dfc2f8
-E1 #fdd3cc
-E2 #fec0df
-E3 #ffb7e7
-E4 #e8649e
-E5 #f551a2
-E6 #f13d74
-E7 #c63478
-E8 #ffdbe9
-E9 #e970cc
-E10 #d33793
-E11 #fcddd2
-E12 #f78fc3
-E13 #b5006d
-E14 #ffd1ba
-E15 #f8c7c9
-E16 #fff3eb
-E17 #ffe2ea
-E18 #ffc7db
-E19 #febad5
-E20 #d8c7d1
-E21 #bd9da1
-E22 #b785a1
-E23 #937a8d
-E24 #e1bce8
-F1 #fd957b
-F2 #fc3d46
-F3 #f74941
-F4 #fc283c
-F5 #e7002f
-F6 #943630
-F7 #971937
-F8 #bc0028
-F9 #e2677a
-F10 #8a4526
-F11 #5a2121
-F12 #fd4e6a
-F13 #f35744
-F14 #ffa9ad
-F15 #d30022
-F16 #fec2a6
-F17 #e69c79
-F18 #d37c46
-F19 #c1444a
-F20 #cd9391
-F21 #f7b4c6
-F22 #fdc0d0
-F23 #f67e66
-F24 #e698aa
-F25 #e54b4f
-G1 #ffe2ce
-G2 #ffc4aa
-G3 #f4c3a5
-G4 #e1b383
-G5 #edb045
-G6 #e99c17
-G7 #9d5b3e
-G8 #753832
-G9 #e6b483
-G10 #d98c39
-G11 #e0c593
-G12 #ffc890
-G13 #b7714a
-G14 #8d614c
-G15 #fcf9e0
-G16 #f2d9ba
-G17 #78524b
-G18 #ffe4cc
-G19 #e07935
-G20 #a94023
-G21 #b88558
-H1 #fdfbff
-H2 #feffff
-H3 #b6b1ba
-H4 #89858c
-H5 #48464e
-H6 #2f2b2f
-H7 #000000
-H8 #e7d6db
-H9 #ededed
-H10 #eee9ea
-H11 #cecdd5
-H12 #fff5ed
-H13 #f5ecd2
-H14 #cfd7d3
-H15 #98a6a8
-H16 #1d1414
-H17 #f1eded
-H18 #fffdf0
-H19 #f6efe2
-H20 #949fa3
-H21 #fffbe1
-H22 #cacad4
-H23 #9a9d94
-M1 #bcc6b8
-M2 #8aa386
-M3 #697d80
-M4 #e3d2bc
-M5 #d0ccaa
-M6 #b0a782
-M7 #b4a497
-M8 #b38281
-M9 #a58767
-M10 #c5b2bc
-M11 #9f7594
-M12 #644749
-M13 #d19066
-M14 #c77362
-M15 #757d78
-`.trim().split("\n").map((line) => {
-    const [code, hex] = line.trim().split(/\s+/);
-    return [code, hex];
-  }))
-);
-
-const mard221Colors = mardLegacySeedColors
-  .filter((color) => Object.prototype.hasOwnProperty.call(MARD_221_HEX_BY_CODE, color.code))
-  .map((color) => createColor({
-    code: color.code,
-    name: color.name,
-    hex: MARD_221_HEX_BY_CODE[color.code],
-    group: color.group,
-    aliases: color.aliases,
-    available: color.available,
-    autoMatch: color.autoMatch,
-    finish: color.finish,
+  return Object.fromEntries(order.map((brandId) => {
+    const brand = brands[brandId];
+    if (!brand) {
+      throw new Error(`Palette brand ${brandId} is listed in brandOrder but missing from brands`);
+    }
+    return [brandId, createBrand({ id: brandId, ...brand })];
   }));
-
-if (mard221Colors.length !== Object.keys(MARD_221_HEX_BY_CODE).length) {
-  throw new Error("MARD 221 palette seed mismatch");
 }
 
-const perlerStarterColors = [
-  createColor({ code: "P01", name: "White", hex: "#f8f6f2", group: "H" }),
-  createColor({ code: "P02", name: "Cream", hex: "#efe2cc", group: "A" }),
-  createColor({ code: "P03", name: "Cheddar", hex: "#f6ba46", group: "A" }),
-  createColor({ code: "P04", name: "Orange", hex: "#f28c2b", group: "A" }),
-  createColor({ code: "P05", name: "Red", hex: "#e85b56", group: "F" }),
-  createColor({ code: "P06", name: "Raspberry", hex: "#ba4f67", group: "D" }),
-  createColor({ code: "P07", name: "Pink", hex: "#e7a4ab", group: "E" }),
-  createColor({ code: "P08", name: "Tan", hex: "#c69872", group: "G" }),
-  createColor({ code: "P09", name: "Brown", hex: "#8a5d44", group: "G" }),
-  createColor({ code: "P10", name: "Toffee", hex: "#5b4034", group: "G" }),
-  createColor({ code: "P11", name: "Kiwi", hex: "#a2bb63", group: "B" }),
-  createColor({ code: "P12", name: "Green", hex: "#5b9154", group: "B" }),
-  createColor({ code: "P13", name: "Turquoise", hex: "#41a8a2", group: "C" }),
-  createColor({ code: "P14", name: "Light Blue", hex: "#85bee8", group: "C" }),
-  createColor({ code: "P15", name: "Blue", hex: "#4476c7", group: "C" }),
-  createColor({ code: "P16", name: "Navy", hex: "#2f4868", group: "C" }),
-  createColor({ code: "P17", name: "Plum", hex: "#7d618a", group: "D" }),
-  createColor({ code: "P18", name: "Gray", hex: "#7e858c", group: "H" }),
-  createColor({ code: "P19", name: "Black", hex: "#1c1e22", group: "H" }),
-  createColor({ code: "P20", name: "Mint", hex: "#b5d9c8", group: "B" }),
-  createColor({ code: "P21", name: "Peach", hex: "#efc0a8", group: "G" }),
-  createColor({ code: "P22", name: "Blush", hex: "#d48f86", group: "E" }),
-  createColor({ code: "P23", name: "Sand", hex: "#d6c3ac", group: "G" }),
-  createColor({ code: "P24", name: "Smoke", hex: "#4a5059", group: "H" }),
-];
-
-const hamaStarterColors = [
-  createColor({ code: "H01", name: "White", hex: "#fbfaf6", group: "H" }),
-  createColor({ code: "H02", name: "Bone", hex: "#eee3d2", group: "A" }),
-  createColor({ code: "H03", name: "Pastel Yellow", hex: "#f3d26a", group: "A" }),
-  createColor({ code: "H04", name: "Curry", hex: "#e5ab43", group: "A" }),
-  createColor({ code: "H05", name: "Scarlet", hex: "#df5f58", group: "F" }),
-  createColor({ code: "H06", name: "Rosewood", hex: "#b44f51", group: "F" }),
-  createColor({ code: "H07", name: "Apricot", hex: "#efb390", group: "G" }),
-  createColor({ code: "H08", name: "Nougat", hex: "#a37a64", group: "G" }),
-  createColor({ code: "H09", name: "Mahogany", hex: "#6e4a39", group: "G" }),
-  createColor({ code: "H10", name: "Lime", hex: "#abc06e", group: "B" }),
-  createColor({ code: "H11", name: "Green", hex: "#618652", group: "B" }),
-  createColor({ code: "H12", name: "Petrol", hex: "#2c857f", group: "C" }),
-  createColor({ code: "H13", name: "Aqua", hex: "#7fcad1", group: "C" }),
-  createColor({ code: "H14", name: "Denim", hex: "#4b74c6", group: "C" }),
-  createColor({ code: "H15", name: "Deep Blue", hex: "#334d83", group: "C" }),
-  createColor({ code: "H16", name: "Lilac", hex: "#ae9fd0", group: "D" }),
-  createColor({ code: "H17", name: "Violet", hex: "#6d5b88", group: "D" }),
-  createColor({ code: "H18", name: "Silver", hex: "#a6aab0", group: "H" }),
-  createColor({ code: "H19", name: "Charcoal", hex: "#35383e", group: "H" }),
-  createColor({ code: "H20", name: "Black", hex: "#18191a", group: "H" }),
-  createColor({ code: "H21", name: "Seafoam", hex: "#afddd2", group: "B" }),
-  createColor({ code: "H22", name: "Clay", hex: "#cf8b6a", group: "G" }),
-  createColor({ code: "H23", name: "Dusk", hex: "#70808a", group: "H" }),
-  createColor({ code: "H24", name: "Ink", hex: "#111315", group: "H" }),
-];
-
-export const brandCatalog = {
-  MARD: createBrand({
-    id: "MARD",
-    label: "MARD 221",
-    shortLabel: "MARD",
-    note: "大陆主流常用方案",
-    badge: "CN Mainstream",
-    paletteEdition: "221 色零售标准色卡",
-    coverage: "full",
-    marketFocus: "CN Mainland",
-    maxOutputColors: 221,
-    defaultMaxColors: 221,
-    recommendedColorCounts: [12, 18, 24, 32, 40, 48, 64, 96, 128, 160, 192, 221],
-    colors: mard221Colors,
-  }),
-  Perler: createBrand({
-    id: "Perler",
-    label: "Perler Starter 24",
-    shortLabel: "Perler",
-    note: "海外品牌参考样本",
-    badge: "Starter",
-    paletteEdition: "24-color starter sample",
-    coverage: "starter",
-    marketFocus: "Import reference",
-    maxOutputColors: 24,
-    defaultMaxColors: 18,
-    recommendedColorCounts: [12, 18, 24],
-    colors: perlerStarterColors,
-  }),
-  Hama: createBrand({
-    id: "Hama",
-    label: "Hama Starter 24",
-    shortLabel: "Hama",
-    note: "柔和插画感样本色盘",
-    badge: "Starter",
-    paletteEdition: "24-color starter sample",
-    coverage: "starter",
-    marketFocus: "Soft illustration",
-    maxOutputColors: 24,
-    defaultMaxColors: 18,
-    recommendedColorCounts: [12, 18, 24],
-    colors: hamaStarterColors,
-  }),
-};
+export const brandCatalog = createCatalog(paletteConfig);
 
 export const brandOrder = Object.keys(brandCatalog);
 

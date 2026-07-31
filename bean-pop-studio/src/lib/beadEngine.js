@@ -1152,7 +1152,10 @@ export function renderBeadCanvas(canvas, {
 
   context.clearRect(0, 0, width, height);
   if (!transparentBackground) {
-    context.fillStyle = "rgba(255, 255, 255, 0.98)";
+    const sheetWash = context.createLinearGradient(0, 0, width, height);
+    sheetWash.addColorStop(0, "rgba(255, 251, 243, 0.98)");
+    sheetWash.addColorStop(1, "rgba(255, 244, 232, 0.94)");
+    context.fillStyle = sheetWash;
     context.fillRect(0, 0, width, height);
   }
 
@@ -1393,24 +1396,23 @@ export function renderPatternCanvas(canvas, {
       const radius = cell / 2;
 
       if (!transparentBackground) {
-        context.fillStyle = "#ffffff";
+        context.fillStyle = "rgba(255, 253, 247, 0.88)";
         context.fillRect(x, y, cell, cell);
       }
 
       if (color && !hiddenCodes.has(color.code) && !hiddenCells.has(rowIndex * gridWidth + columnIndex)) {
         const isHighlighted = highlightCodes.has(color.code);
-        context.globalAlpha = hasHighlights && !isHighlighted ? 0.16 : 1;
-        context.fillStyle = color.hex;
-        if (roundBeads) {
-          context.beginPath();
-          context.arc(x + radius, y + radius, Math.max(2, radius - 0.8), 0, Math.PI * 2);
-          context.fill();
-        } else {
-          context.fillRect(x + 1, y + 1, Math.max(2, cell - 2), Math.max(2, cell - 2));
-        }
+        const beadAlpha = hasHighlights && !isHighlighted ? 0.16 : 1;
+        context.globalAlpha = beadAlpha;
+        drawExportBead(context, x + radius, y + radius, cell, color, {
+          showCode: false,
+          roundBeads,
+          shadow: !hero && cell >= 9,
+        });
+        context.globalAlpha = beadAlpha;
 
         if (!hero && showCodes && cell >= 14) {
-          context.fillStyle = getBrightness(color) > 0.62 ? "#17181a" : "#ffffff";
+          context.fillStyle = getBrightness(color) > 0.62 ? "rgba(55, 38, 29, 0.76)" : "rgba(255, 255, 255, 0.84)";
           context.font = `700 ${Math.max(6, Math.floor(cell * 0.28))}px "IBM Plex Mono", monospace`;
           context.textAlign = "center";
           context.textBaseline = "middle";
@@ -1432,14 +1434,14 @@ export function renderPatternCanvas(canvas, {
       }
 
       context.globalAlpha = 1;
-      context.strokeStyle = color ? "rgba(22, 22, 22, 0.08)" : "rgba(22, 22, 22, 0.045)";
+      context.strokeStyle = color ? "rgba(117, 83, 62, 0.2)" : "rgba(117, 83, 62, 0.16)";
       context.lineWidth = 1;
       context.strokeRect(x, y, cell, cell);
     });
   });
 
-  context.strokeStyle = "rgba(255, 90, 54, 0.5)";
-  context.lineWidth = hero ? 1 : 2;
+  context.strokeStyle = "rgba(245, 117, 108, 0.68)";
+  context.lineWidth = hero ? 1 : Math.max(1.5, cell * 0.11);
   for (let index = Math.ceil((drawMinColumn + 1) / 10) * 10; index <= drawMaxColumn; index += 10) {
     const x = offsetX + (index - drawMinColumn) * cell;
     context.beginPath();
@@ -1454,6 +1456,138 @@ export function renderPatternCanvas(canvas, {
     context.lineTo(offsetX + sheetWidth, y);
     context.stroke();
   }
+}
+
+function drawExportRoundedRect(context, x, y, width, height, radius) {
+  context.beginPath();
+  context.roundRect(x, y, width, height, radius);
+}
+
+function fitFontSize(context, text, maxWidth, maxSize, minSize, fontFactory) {
+  let size = maxSize;
+  while (size > minSize) {
+    context.font = fontFactory(size);
+    if (context.measureText(text).width <= maxWidth) return size;
+    size -= 1;
+  }
+  return minSize;
+}
+
+function drawExportBead(context, x, y, cell, color, {
+  showCode = false,
+  roundBeads = true,
+  labelAlpha = 0.78,
+  shadow = true,
+} = {}) {
+  if (!color) return;
+
+  const beadFinish = getPreviewBeadFinish(color);
+  const radius = cell * 0.43;
+  const beadSize = radius * 2;
+  const corner = Math.max(2, cell * 0.22);
+
+  context.save();
+  if (shadow && beadFinish) {
+    context.fillStyle = beadFinish.boardShadowColor;
+    if (roundBeads) {
+      context.beginPath();
+      context.arc(x, y + cell * 0.06, radius, 0, Math.PI * 2);
+      context.fill();
+    } else {
+      drawExportRoundedRect(context, x - radius, y - radius + cell * 0.06, beadSize, beadSize, corner);
+      context.fill();
+    }
+  }
+
+  const fill = beadFinish
+    ? context.createRadialGradient(
+      x - cell * 0.16,
+      y - cell * 0.2,
+      Math.max(1, cell * 0.07),
+      x + cell * 0.04,
+      y + cell * 0.04,
+      radius
+    )
+    : null;
+  if (fill && beadFinish) {
+    fill.addColorStop(0, beadFinish.highlightColor);
+    fill.addColorStop(0.58, color.hex);
+    fill.addColorStop(1, beadFinish.shadowColor);
+    context.fillStyle = fill;
+  } else {
+    context.fillStyle = color.hex;
+  }
+
+  if (roundBeads) {
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fill();
+  } else {
+    drawExportRoundedRect(context, x - radius, y - radius, beadSize, beadSize, corner);
+    context.fill();
+  }
+
+  if (beadFinish) {
+    context.strokeStyle = beadFinish.rimColor;
+    context.lineWidth = Math.max(0.75, cell * beadFinish.rimWidthFactor);
+    if (roundBeads) {
+      context.beginPath();
+      context.arc(x, y, Math.max(1, radius - cell * 0.04), 0, Math.PI * 2);
+      context.stroke();
+    } else {
+      drawExportRoundedRect(context, x - radius + 0.8, y - radius + 0.8, beadSize - 1.6, beadSize - 1.6, corner);
+      context.stroke();
+    }
+
+    context.fillStyle = "rgba(255, 255, 255, 0.42)";
+    context.beginPath();
+    context.ellipse(
+      x - cell * 0.16,
+      y - cell * 0.18,
+      Math.max(1.1, cell * 0.1),
+      Math.max(0.8, cell * 0.055),
+      -0.64,
+      0,
+      Math.PI * 2
+    );
+    context.fill();
+  }
+
+  if (showCode) {
+    context.fillStyle = getBrightness(color) > 0.62
+      ? `rgba(50, 35, 27, ${labelAlpha})`
+      : `rgba(255, 255, 255, ${labelAlpha})`;
+    context.font = `800 ${Math.max(6, Math.floor(cell * 0.26))}px "IBM Plex Mono", monospace`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(color.code, x, y + 0.35);
+  }
+
+  context.restore();
+}
+
+function buildExportVisibleCounts(matrix, width, hiddenCodes, hiddenCells) {
+  const counts = new Map();
+
+  matrix.forEach((row, rowIndex) => {
+    row.forEach((color, columnIndex) => {
+      const key = rowIndex * width + columnIndex;
+      if (!color) return;
+      if (hiddenCodes.has(color.code)) return;
+      if (hiddenCells.has(key)) return;
+
+      const outerScore = getOuterScore(rowIndex, columnIndex, width, matrix.length);
+      const current = counts.get(color.code);
+      counts.set(color.code, {
+        ...color,
+        count: (current?.count || 0) + 1,
+        outerWeight: (current?.outerWeight || 0) + outerScore,
+        outerScore: ((current?.outerWeight || 0) + outerScore) / ((current?.count || 0) + 1),
+      });
+    });
+  });
+
+  return sortCountsOuterFirst([...counts.values()]);
 }
 
 export function createExportCanvas({
@@ -1471,7 +1605,7 @@ export function createExportCanvas({
   const padding = 28;
   const cell = 22;
   const gap = 2;
-  const statsWidth = 336;
+  const statsWidth = 380;
   const gridWidth = width * (cell + gap) - gap;
   const gridHeight = height * (cell + gap) - gap;
   const canvasWidth = padding * 3 + gridWidth + statsWidth;
@@ -1482,20 +1616,26 @@ export function createExportCanvas({
   const context = canvas.getContext("2d");
   const hiddenCodes = new Set(hiddenColorCodes);
   const hiddenCells = new Set(hiddenCellKeys);
-  const totalBeads = counts.reduce((sum, entry) => sum + entry.count, 0);
+  const displayCounts = counts.length
+    ? counts
+    : buildExportVisibleCounts(matrix, width, hiddenCodes, hiddenCells);
+  const totalBeads = displayCounts.reduce((sum, entry) => sum + entry.count, 0);
+  const safeTitle = title || "拼豆图纸";
 
   context.fillStyle = "#fff9ef";
   context.fillRect(0, 0, canvasWidth, canvasHeight);
 
   matrix.forEach((row, rowIndex) => {
     row.forEach((color, columnIndex) => {
+      const key = rowIndex * width + columnIndex;
       const x = padding + columnIndex * (cell + gap);
       const y = padding + rowIndex * (cell + gap);
+
       context.fillStyle = "#ffffff";
       context.fillRect(x, y, cell, cell);
       if (!color) return;
       if (hiddenCodes.has(color.code)) return;
-      if (hiddenCells.has(rowIndex * width + columnIndex)) return;
+      if (hiddenCells.has(key)) return;
 
       if (roundBeads) {
         context.beginPath();
@@ -1535,92 +1675,130 @@ export function createExportCanvas({
   }
 
   const statsX = padding * 2 + gridWidth;
-  context.fillStyle = "#fffefb";
+  const statsInnerX = statsX + 22;
+  const statsInnerWidth = statsWidth - 44;
+  const statsGradient = context.createLinearGradient(statsX, padding, statsX, canvasHeight - padding);
+  statsGradient.addColorStop(0, "#fffefb");
+  statsGradient.addColorStop(1, "#fff6e8");
+  context.fillStyle = statsGradient;
   context.fillRect(statsX, padding, statsWidth, canvasHeight - padding * 2);
-  context.strokeStyle = "#ece2d4";
+  context.strokeStyle = "rgba(126, 92, 67, 0.18)";
   context.strokeRect(statsX, padding, statsWidth, canvasHeight - padding * 2);
 
-  context.fillStyle = "#171717";
   context.textAlign = "left";
   context.textBaseline = "alphabetic";
-  context.font = '800 28px "Bricolage Grotesque", "Noto Sans SC", sans-serif';
-  context.fillText(title, statsX + 20, padding + 40, statsWidth - 40);
-  context.font = '600 13px "IBM Plex Mono", monospace';
-  context.fillStyle = "#65594d";
+  const titleSize = fitFontSize(
+    context,
+    safeTitle,
+    statsInnerWidth,
+    30,
+    19,
+    (size) => `900 ${size}px "Noto Serif SC", "Noto Sans SC", serif`
+  );
+  context.font = `900 ${titleSize}px "Noto Serif SC", "Noto Sans SC", serif`;
+  context.fillStyle = "#513324";
+  context.fillText(safeTitle, statsInnerX, padding + 42, statsInnerWidth);
+
   const hiddenParts = [];
   if (hiddenColorCodes.length) hiddenParts.push(`已隐藏 ${hiddenColorCodes.length} 色`);
   if (hiddenCellKeys.length) hiddenParts.push("已隐藏底色");
   const hiddenScope = hiddenParts.length ? ` · ${hiddenParts.join(" · ")}` : "";
-  context.fillText(`${brand} · ${width}x${height} · ${counts.length} 色${hiddenScope}`, statsX + 20, padding + 68, statsWidth - 40);
+  context.font = '800 13px "IBM Plex Mono", "Noto Sans SC", monospace';
+  context.fillStyle = "rgba(103, 70, 47, 0.72)";
+  context.fillText(`${brand} · ${width}x${height} · ${displayCounts.length} 色${hiddenScope}`, statsInnerX, padding + 70, statsInnerWidth);
 
-  context.fillStyle = "#171717";
-  context.font = '800 18px "Bricolage Grotesque", "Noto Sans SC", sans-serif';
-  context.fillText(`豆子总数：${totalBeads.toLocaleString("zh-CN")}`, statsX + 20, padding + 112, statsWidth - 40);
+  context.fillStyle = "#513324";
+  context.font = '900 20px "Noto Sans SC", sans-serif';
+  context.fillText(`豆子总数：${totalBeads.toLocaleString("zh-CN")}`, statsInnerX, padding + 112, statsInnerWidth);
 
-  let y = padding + 146;
-  counts.slice(0, 10).forEach((entry) => {
-    const itemX = statsX + 20;
-    const swatchSize = 22;
-    const codeX = itemX + 34;
-    const nameX = codeX + 64;
-    const countX = statsX + statsWidth - 24;
+  context.save();
+  context.strokeStyle = "rgba(246, 111, 104, 0.35)";
+  context.setLineDash([7, 7]);
+  context.beginPath();
+  context.moveTo(statsInnerX, padding + 136);
+  context.lineTo(statsInnerX + statsInnerWidth, padding + 136);
+  context.stroke();
+  context.restore();
 
-    context.fillStyle = entry.hex;
-    context.fillRect(itemX, y, swatchSize, swatchSize);
-    context.strokeStyle = "#e5dacb";
-    context.strokeRect(itemX, y, swatchSize, swatchSize);
+  context.fillStyle = "rgba(103, 70, 47, 0.76)";
+  context.font = '800 13px "Noto Sans SC", sans-serif';
+  context.fillText("色号清单", statsInnerX, padding + 164);
 
-    context.fillStyle = "#171717";
-    context.font = '800 14px "IBM Plex Mono", monospace';
+  const listTop = padding + 182;
+  const listBottom = canvasHeight - padding - 70;
+  const listHeight = Math.max(160, listBottom - listTop);
+  const itemHeight = Math.max(18, Math.min(34, Math.floor(listHeight / Math.max(displayCounts.length, 1))));
+  const beadCell = Math.max(15, Math.min(23, itemHeight - 5));
+  const codeFontSize = itemHeight <= 21 ? 11 : 13;
+  const nameFontSize = itemHeight <= 25 ? 0 : 10.5;
+  const rowGap = Math.max(0, Math.min(4, itemHeight - 18));
+
+  displayCounts.forEach((entry, index) => {
+    const y = listTop + index * itemHeight;
+    if (y + itemHeight > listBottom + 1) return;
+
+    if (index > 0) {
+      context.strokeStyle = "rgba(126, 92, 67, 0.08)";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(statsInnerX, y - rowGap / 2);
+      context.lineTo(statsInnerX + statsInnerWidth, y - rowGap / 2);
+      context.stroke();
+    }
+
+    drawExportBead(context, statsInnerX + beadCell / 2, y + itemHeight / 2, beadCell, entry, {
+      roundBeads: true,
+      shadow: false,
+    });
+
+    const codeX = statsInnerX + 34;
+    const countX = statsInnerX + statsInnerWidth;
+    context.fillStyle = "#4c3428";
+    context.font = `900 ${codeFontSize}px "IBM Plex Mono", monospace`;
     context.textAlign = "left";
-    context.textBaseline = "alphabetic";
-    context.fillText(entry.code, codeX, y + 17);
+    context.textBaseline = "middle";
+    context.fillText(entry.code, codeX, y + itemHeight / 2);
 
-    context.fillStyle = "#65594d";
-    context.font = '600 12px "Noto Sans SC", sans-serif';
-    context.fillText(entry.name, nameX, y + 17, Math.max(42, countX - nameX - 14));
+    if (nameFontSize) {
+      context.fillStyle = "rgba(103, 70, 47, 0.56)";
+      context.font = `700 ${nameFontSize}px "Noto Sans SC", sans-serif`;
+      context.fillText(entry.name, codeX + 54, y + itemHeight / 2, Math.max(44, countX - codeX - 98));
+    }
 
-    context.fillStyle = "#171717";
-    context.font = '800 14px "IBM Plex Mono", monospace';
+    context.fillStyle = "#4c3428";
+    context.font = `900 ${codeFontSize}px "IBM Plex Mono", monospace`;
     context.textAlign = "right";
-    context.fillText(String(entry.count), countX, y + 19);
-
-    y += 34;
+    context.fillText(String(entry.count), countX, y + itemHeight / 2);
   });
 
-  const watermarkText = "拼豆.cn";
-  const watermarkPadding = 22;
-  const watermarkHeight = 42;
-  context.save();
-  context.font = '900 24px "Bricolage Grotesque", "Noto Sans SC", sans-serif';
-  const watermarkTextWidth = context.measureText(watermarkText).width;
-  const watermarkWidth = Math.ceil(watermarkTextWidth + 78);
-  const watermarkX = canvasWidth - padding - watermarkWidth;
-  const watermarkY = canvasHeight - padding - watermarkHeight;
-  context.fillStyle = "rgba(16, 36, 31, 0.06)";
-  context.beginPath();
-  context.roundRect(watermarkX, watermarkY, watermarkWidth, watermarkHeight, 21);
-  context.fill();
+  if (displayCounts.length && listTop + displayCounts.length * itemHeight > listBottom + 1) {
+    context.fillStyle = "rgba(103, 70, 47, 0.62)";
+    context.font = '700 12px "Noto Sans SC", sans-serif';
+    context.textAlign = "left";
+    context.textBaseline = "alphabetic";
+    context.fillText("色数较多，已压缩行距展示完整清单", statsInnerX, listBottom + 22, statsInnerWidth);
+  }
 
-  const dotY = watermarkY + watermarkHeight / 2;
-  const dotX = watermarkX + watermarkPadding;
+  const watermarkText = "拼豆.cn";
+  const watermarkY = canvasHeight - padding - 26;
+  const markX = statsInnerX;
   [
-    { x: 0, y: -6, color: "#ff5a36" },
-    { x: 12, y: -6, color: "#f0c348" },
-    { x: 0, y: 6, color: "#00a77e" },
-    { x: 12, y: 6, color: "#7bc2ef" },
+    { x: 0, y: -7, color: "rgba(246, 111, 104, 0.46)" },
+    { x: 15, y: -7, color: "rgba(240, 195, 72, 0.46)" },
+    { x: 0, y: 8, color: "rgba(88, 187, 169, 0.46)" },
+    { x: 15, y: 8, color: "rgba(120, 189, 214, 0.46)" },
   ].forEach((dot) => {
     context.beginPath();
     context.fillStyle = dot.color;
-    context.arc(dotX + dot.x, dotY + dot.y, 4.1, 0, Math.PI * 2);
+    context.arc(markX + dot.x + 6, watermarkY + dot.y, 5.5, 0, Math.PI * 2);
     context.fill();
   });
 
-  context.fillStyle = "rgba(16, 36, 31, 0.7)";
   context.textAlign = "right";
   context.textBaseline = "middle";
-  context.fillText(watermarkText, watermarkX + watermarkWidth - 20, dotY + 0.5);
-  context.restore();
+  context.fillStyle = "rgba(103, 70, 47, 0.42)";
+  context.font = '900 32px "Noto Sans SC", sans-serif';
+  context.fillText(watermarkText, statsInnerX + statsInnerWidth, watermarkY);
 
   return canvas;
 }

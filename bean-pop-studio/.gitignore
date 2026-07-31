@@ -1,5 +1,7 @@
 node_modules/
 dist/
+public/palettes.json
+public/skill/
 .DS_Store
 
 *.log
@@ -11,4 +13,3 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
-

@@ -31,6 +31,7 @@ http://localhost:4173
 ```bash
 npm run test
 npm run build
+npm run build:skill
 npm run preview
 ```
 
@@ -54,15 +55,45 @@ src/
     ResultSidebar.vue             # 结果侧栏组件
     SavedShelf.vue                # 本地作品夹
   data/
-    palettes.js                   # 拼豆品牌色盘
+    palettes.json                 # 拼豆品牌色盘配置
+    palettes.js                   # 读取色盘配置并导出运行时数据
     presets.js                    # 示例/预设数据
+  public/
+    palettes.json                 # dev/build/test 时自动同步的浏览器访问版
+    skill/pindou-pattern-skill.js # dev/build 时自动生成的网页脚本
   lib/
     beadEngine.js                 # 核心拼豆算法、Canvas 渲染、导出
     imagePrep.js                  # 图片取景、主体识别、风格处理
+    patternSkill.js               # 输入图片并按推荐算法生成图纸的网页 API
     productEstimator.js           # 材料与难度估算
     storage.js                    # LocalStorage 持久化
     studioStatus.js               # 制作状态文案
 ```
+
+## 网页脚本 API
+
+`npm run dev` 和 `npm run build` 会自动生成一份稳定路径的脚本：
+
+```html
+<script src="/skill/pindou-pattern-skill.js"></script>
+```
+
+上传图片后生成图纸：
+
+```js
+const result = await window.PindouPatternSkill.generate(file);
+document.body.append(result.exportCanvas);
+```
+
+直接触发下载：
+
+```js
+await window.PindouPatternSkill.download(file, {
+  projectName: "我的拼豆图纸",
+});
+```
+
+不传 `targetWidth` 和 `maxColors` 时，会复用 App 的推荐尺寸和推荐颜色数算法。色卡仍读取 `src/data/palettes.json`，默认按已校对的 `MARD 221` 运行。
 
 ## 核心实现
 
@@ -146,4 +177,3 @@ src/
 - 增加移动端逐板模式：一块板一块板查看，已完成豆点可标记。
 - 增加更强的主体提取：接入前景分割或用户手动画框。
 - 增加导入/导出项目 JSON，支持二次编辑和分享。
-

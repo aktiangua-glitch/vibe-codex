@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getRecommendedTargetWidth } from "./recommendation.js";
+import { getRecommendedMaxColors, getRecommendedTargetWidth } from "./recommendation.js";
 
 describe("recommendation", () => {
   it("falls back to a larger default board size when source dimensions are missing", () => {
@@ -65,5 +65,23 @@ describe("recommendation", () => {
         confidence: 0.18,
       },
     })).toBe(145);
+  });
+
+  it("recommends a bounded output color count for the selected brand", () => {
+    expect(getRecommendedMaxColors({
+      brandColorLimit: 221,
+      imageWidth: 3200,
+      imageHeight: 2100,
+      subjectBox: { confidence: 0.9 },
+      targetWidth: 116,
+    })).toBe(34);
+
+    expect(getRecommendedMaxColors({
+      brandColorLimit: 18,
+      imageWidth: 3200,
+      imageHeight: 2100,
+      subjectBox: { confidence: 0.9 },
+      targetWidth: 116,
+    })).toBe(18);
   });
 });

@@ -92,3 +92,30 @@ export function getRecommendedTargetWidth({
     guideSizes
   );
 }
+
+export function getRecommendedMaxColors({
+  brandColorLimit = 36,
+  imageHeight,
+  imageWidth,
+  subjectBox = DEFAULT_SUBJECT_BOX,
+  targetWidth,
+}) {
+  const limit = Math.max(4, Math.round(Number(brandColorLimit) || 36));
+  if (!imageWidth || !imageHeight) return Math.min(18, limit);
+
+  const longSide = Math.max(imageWidth, imageHeight);
+  const shortSide = Math.max(1, Math.min(imageWidth, imageHeight));
+  const aspect = longSide / shortSide;
+  let count = 16;
+
+  if (targetWidth >= 116) count = 28;
+  else if (targetWidth >= 87) count = 24;
+  else if (targetWidth >= 58) count = 18;
+  else count = 12;
+
+  if (longSide >= 2800) count += 4;
+  if (aspect >= 1.5) count += 2;
+  if ((subjectBox?.confidence ?? DEFAULT_SUBJECT_BOX.confidence) < 0.42) count += 2;
+
+  return Math.max(8, Math.min(limit, Math.round(count / 2) * 2));
+}
