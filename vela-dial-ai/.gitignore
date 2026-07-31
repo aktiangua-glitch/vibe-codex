@@ -1,0 +1,38 @@
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.iml
+
+# PlatformIO
+.pio/
+.cache/
+
+# Java / Maven
+bridge/target/
+bridge/.classpath
+bridge/.project
+bridge/.settings/
+
+# Local runtime data and secrets
+bridge/data/
+bridge/runtime/
+bridge/config/application.yml
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+include/vela_secrets.h
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Temporary recordings and logs
+*.log
+*.wav

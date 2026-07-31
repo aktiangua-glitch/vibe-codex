@@ -1,0 +1,9 @@
+# Copy this file to config/application.yml for local development.
+# Spring Boot loads config/application.yml automatically and lets it override
+# the safe defaults packaged in src/main/resources/application.yml.
+vela:
+  asr:
+    provider: volcengine
+    volcengine:
+      api-key: replace-with-your-volcengine-api-key
+      resource-id: volc.bigasr.auc_turbo
